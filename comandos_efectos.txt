@@ -1,0 +1,35 @@
+========================================
+  COMANDOS DE EJECUCION DE EFECTOS
+  Visor Roto - Fotografia Creativa
+========================================
+
+Ejecutar desde: c:\Users\juane\Documents\ProyectosProgramacion\PythonProject4
+
+----------------------------------------
+EFECTO              | COMANDO
+----------------------------------------
+Posterize           | python efecto_posterize.py
+Thermal (termico)   | python efecto_thermal.py
+ASCII (delgado)     | python efecto_ascii.py
+ASCII (grueso/bold) | python efecto_ascii_bold.py
+Combo (glitch)      | python efecto_combo.py
+RGB Shift           | python efecto_rgb_shift.py
+Slice (bandas)      | python efecto_slice.py
+Pixel Sort          | python efecto_pixel_sort.py
+Noise Block (ruido) | python efecto_noise_block.py
+Edges (contornos)   | python efecto_edges.py
+Sketch (grabado)    | python efecto_sketch.py
+Voxel (cubos 3D)    | python efecto_voxel.py
+Distort (blur)      | python efecto_distort.py
+----------------------------------------
+
+========================================
+  CONTROLES (iguales para todos)
+========================================
+q       -> salir
+m       -> cambiar modo de encuadre
+r       -> activar/desactivar rotacion del visor
++/-     -> aumentar/disminuir intensidad
+h       -> mostrar/ocultar esqueleto de manos
+espacio -> pausar/reanudar
+s       -> guardar screenshot (PNG)
