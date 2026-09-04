@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor Roto — Efectos Visuales en Tiempo Real</title>
+    <meta name="description" content="Aplica 13 efectos visuales de OpenCV en tiempo real usando la cámara de tu dispositivo con detección de manos. Posterize, thermal, ASCII art, glitch y más.">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💎</text></svg>">
+</head>
+<body>
+
+    <!-- ===== Header ===== -->
+    <header class="header" id="header">
+        <div class="header__brand">
+            <div class="header__logo">💎</div>
+            <div>
+                <div class="header__title">Visor Roto</div>
+                <div class="header__subtitle">Efectos OpenCV + Hand Tracking</div>
+            </div>
+        </div>
+        <div class="header__status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Desconectado</span>
+        </div>
+    </header>
+
+    <!-- ===== Main Layout ===== -->
+    <main class="main" id="mainLayout">
+
+        <!-- Video Section -->
+        <section class="video-section" id="videoSection">
+
+            <!-- Video Display -->
+            <div class="video-container" id="videoContainer">
+                <canvas id="outputCanvas"></canvas>
+                <video id="sourceVideo" autoplay playsinline muted></video>
+                <canvas id="hiddenCanvas"></canvas>
+
+                <!-- Overlay controls (top-right) -->
+                <div class="video-overlay-controls" id="videoOverlayControls">
+                    <button class="btn-overlay" id="flipCameraBtn" title="Voltear cámara (frontal / trasera)">
+                        🔄
+                    </button>
+                    <button class="btn-overlay" id="fullscreenBtn" title="Pantalla completa">
+                        ⛶
+                    </button>
+                </div>
+
+                <!-- Placeholder before camera starts -->
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <div class="video-placeholder__icon">🤲</div>
+                    <p class="video-placeholder__text">
+                        Activa tu cámara y usa tus manos para crear un recuadro donde se aplicará el efecto
+                    </p>
+                    <button class="video-placeholder__btn" id="startCameraBtn">
+                        Iniciar Cámara
+                    </button>
+                </div>
+            </div>
+
+            <!-- Controls Bar -->
+            <div class="controls-bar" id="controlsBar">
+                <!-- Camera selector -->
+                <div class="camera-select-wrapper">
+                    <label class="controls-bar__label" for="cameraSelect">📹</label>
+                    <select id="cameraSelect" class="camera-select" title="Seleccionar cámara">
+                        <option value="">Cargando…</option>
+                    </select>
+                </div>
+
+                <span class="controls-bar__separator"></span>
+
+                <span class="controls-bar__label">Intensidad</span>
+                <div class="slider-wrapper">
+                    <input type="range" id="intensitySlider" min="5" max="200" value="85" step="1">
+                    <span class="controls-bar__value" id="intensityValue">85</span>
+                </div>
+                <button class="btn-capture" id="captureBtn" title="Guardar captura">
+                    <span class="btn-capture__icon">📸</span>
+                    <span>Captura</span>
+                </button>
+                <span class="fps-badge" id="fpsBadge">— FPS</span>
+            </div>
+
+            <!-- Tracking Controls Bar -->
+            <div class="controls-bar tracking-controls" id="trackingControls">
+                <button class="btn-control" id="modeBtn" title="Cambiar modo de encuadre (m)">
+                    <span class="btn-control__icon">🖐️</span>
+                    <span class="btn-control__text" id="modeLabel">Visor de dedos</span>
+                </button>
+
+                <span class="controls-bar__separator"></span>
+
+                <button class="btn-control" id="rotationBtn" title="Activar/desactivar rotación (r)">
+                    <span class="btn-control__icon">🔄</span>
+                    <span class="btn-control__text">Rotación</span>
+                    <span class="btn-control__badge" id="rotationBadge">ON</span>
+                </button>
+
+                <button class="btn-control" id="skeletonBtn" title="Mostrar/ocultar esqueleto de manos (h)">
+                    <span class="btn-control__icon">🦴</span>
+                    <span class="btn-control__text">Esqueleto</span>
+                    <span class="btn-control__badge" id="skeletonBadge">OFF</span>
+                </button>
+            </div>
+
+            <!-- Current Effect Display -->
+            <div class="current-effect" id="currentEffectDisplay">
+                <span class="current-effect__emoji" id="currentEmoji">🎨</span>
+                <div class="current-effect__info">
+                    <span class="current-effect__label">Efecto activo</span>
+                    <span class="current-effect__name" id="currentEffectName">Posterize</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="panel">
+                <div class="panel__header">
+                    <span class="panel__title">Efectos</span>
+                    <span class="panel__count" id="effectCount">13</span>
+                </div>
+                <div class="panel__body" id="effectsList">
+                    <!-- Effect cards injected by JS -->
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- ===== Scripts ===== -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        // ---- DOM Elements ----
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const videoContainer = document.getElementById('videoContainer');
+        const outputCanvas = document.getElementById('outputCanvas');
+        const sourceVideo = document.getElementById('sourceVideo');
+        const hiddenCanvas = document.getElementById('hiddenCanvas');
+        const videoPlaceholder = document.getElementById('videoPlaceholder');
+        const startCameraBtn = document.getElementById('startCameraBtn');
+        const intensitySlider = document.getElementById('intensitySlider');
+        const intensityValue = document.getElementById('intensityValue');
+        const captureBtn = document.getElementById('captureBtn');
+        const fpsBadge = document.getElementById('fpsBadge');
+        const effectsList = document.getElementById('effectsList');
+        const effectCount = document.getElementById('effectCount');
+        const currentEmoji = document.getElementById('currentEmoji');
+        const currentEffectName = document.getElementById('currentEffectName');
+        const toast = document.getElementById('toast');
+        const cameraSelect = document.getElementById('cameraSelect');
+        const flipCameraBtn = document.getElementById('flipCameraBtn');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+        const modeBtn = document.getElementById('modeBtn');
+        const modeLabel = document.getElementById('modeLabel');
+        const rotationBtn = document.getElementById('rotationBtn');
+        const rotationBadge = document.getElementById('rotationBadge');
+        const skeletonBtn = document.getElementById('skeletonBtn');
+        const skeletonBadge = document.getElementById('skeletonBadge');
+
+        const outCtx = outputCanvas.getContext('2d');
+        const hidCtx = hiddenCanvas.getContext('2d');
+
+        // ---- State ----
+        let socket = null;
+        let currentEffect = 'posterize';
+        let intensity = 85;
+        let effectsData = {};
+        let streaming = false;
+        let frameCount = 0;
+        let fpsInterval = null;
+        let lastFpsTime = Date.now();
+        let waitingForResponse = false;
+        let availableCameras = [];
+        let currentDeviceId = null;
+        let currentFacingMode = 'user';
+        let isFullscreen = false;
+        let streamingLoopStarted = false;
+
+        // ---- Socket.IO Connection ----
+        function connectSocket() {
+            socket = io({
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+            });
+
+            socket.on('connect', () => {
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = 'Conectado';
+            });
+
+            socket.on('disconnect', () => {
+                statusDot.className = 'status-dot';
+                statusText.textContent = 'Desconectado';
+            });
+
+            socket.on('state_update', (data) => {
+                if (data.effects_list) {
+                    effectsData = data.effects_list;
+                    renderEffectCards();
+                }
+                if (data.effect) {
+                    currentEffect = data.effect;
+                    updateActiveCard();
+                    updateCurrentEffectDisplay();
+                }
+                if (data.intensity !== undefined) {
+                    intensity = data.intensity;
+                    intensitySlider.value = intensity;
+                    intensityValue.textContent = intensity;
+                }
+                if (data.mode_label) {
+                    modeLabel.textContent = data.mode_label;
+                }
+                if (data.allow_rotation !== undefined) {
+                    rotationBadge.textContent = data.allow_rotation ? 'ON' : 'OFF';
+                    rotationBtn.classList.toggle('active', data.allow_rotation);
+                }
+                if (data.show_skeleton !== undefined) {
+                    skeletonBadge.textContent = data.show_skeleton ? 'ON' : 'OFF';
+                    skeletonBtn.classList.toggle('active', data.show_skeleton);
+                }
+            });
+
+            socket.on('processed_frame', (data) => {
+                waitingForResponse = false;
+                if (!data.frame) return;
+                const img = new Image();
+                img.onload = () => {
+                    outputCanvas.width = img.width;
+                    outputCanvas.height = img.height;
+                    outCtx.drawImage(img, 0, 0);
+                    frameCount++;
+                };
+                img.src = data.frame;
+            });
+        }
+
+        // ---- Render Effect Cards ----
+        function renderEffectCards() {
+            const keys = Object.keys(effectsData);
+            effectCount.textContent = keys.length;
+
+            let html = '<div class="effects-grid">';
+            keys.forEach(key => {
+                const ef = effectsData[key];
+                const isActive = key === currentEffect;
+                html += `
+                    <div class="effect-card ${isActive ? 'active' : ''}"
+                         data-effect="${key}"
+                         id="effectCard_${key}">
+                        <span class="effect-card__emoji">${ef.emoji}</span>
+                        <div class="effect-card__info">
+                            <span class="effect-card__name">${ef.name}</span>
+                            <span class="effect-card__desc">${ef.desc}</span>
+                        </div>
+                        <span class="effect-card__indicator"></span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            effectsList.innerHTML = html;
+
+            document.querySelectorAll('.effect-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    const effectKey = card.dataset.effect;
+                    if (effectKey === currentEffect) return;
+                    currentEffect = effectKey;
+                    socket.emit('change_effect', { effect: effectKey });
+                    updateActiveCard();
+                    updateCurrentEffectDisplay();
+                    showToast(`Efecto: ${effectsData[effectKey].emoji} ${effectsData[effectKey].name}`);
+                });
+            });
+        }
+
+        function updateActiveCard() {
+            document.querySelectorAll('.effect-card').forEach(card => {
+                card.classList.toggle('active', card.dataset.effect === currentEffect);
+            });
+        }
+
+        function updateCurrentEffectDisplay() {
+            if (effectsData[currentEffect]) {
+                currentEmoji.textContent = effectsData[currentEffect].emoji;
+                currentEffectName.textContent = effectsData[currentEffect].name;
+            }
+        }
+
+        // ---- Camera ----
+        async function enumerateCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                availableCameras = devices.filter(d => d.kind === 'videoinput');
+                cameraSelect.innerHTML = '';
+                availableCameras.forEach((cam, i) => {
+                    const option = document.createElement('option');
+                    option.value = cam.deviceId;
+                    option.textContent = cam.label || `Cámara ${i + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+                if (currentDeviceId) {
+                    cameraSelect.value = currentDeviceId;
+                }
+                const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window);
+                flipCameraBtn.style.display = (availableCameras.length >= 2 || isMobile) ? 'flex' : 'none';
+            } catch (err) {
+                console.warn('Could not enumerate cameras:', err);
+            }
+        }
+
+        function stopCurrentStream() {
+            if (sourceVideo.srcObject) {
+                sourceVideo.srcObject.getTracks().forEach(t => t.stop());
+                sourceVideo.srcObject = null;
+            }
+        }
+
+        async function startCamera(deviceId, facingMode) {
+            try {
+                stopCurrentStream();
+
+                const videoConstraints = {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                };
+
+                if (deviceId) {
+                    videoConstraints.deviceId = { exact: deviceId };
+                } else if (facingMode) {
+                    videoConstraints.facingMode = facingMode;
+                } else {
+                    videoConstraints.facingMode = 'user';
+                }
+
+                const constraints = { video: videoConstraints, audio: false };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                sourceVideo.srcObject = stream;
+
+                const activeTrack = stream.getVideoTracks()[0];
+                if (activeTrack) {
+                    const settings = activeTrack.getSettings();
+                    currentDeviceId = settings.deviceId || deviceId;
+                    currentFacingMode = settings.facingMode || facingMode || 'user';
+                }
+
+                sourceVideo.addEventListener('loadedmetadata', () => {
+                    hiddenCanvas.width = sourceVideo.videoWidth;
+                    hiddenCanvas.height = sourceVideo.videoHeight;
+                    outputCanvas.width = sourceVideo.videoWidth;
+                    outputCanvas.height = sourceVideo.videoHeight;
+
+                    videoPlaceholder.classList.add('hidden');
+                    streaming = true;
+                    statusDot.className = 'status-dot streaming';
+                    statusText.textContent = 'Transmitiendo';
+
+                    enumerateCameras();
+
+                    if (!streamingLoopStarted) {
+                        streamingLoopStarted = true;
+                        startStreaming();
+                        startFPSCounter();
+                    }
+                }, { once: true });
+            } catch (err) {
+                showToast('⚠️ No se pudo acceder a la cámara: ' + err.message);
+                console.error('Camera error:', err);
+            }
+        }
+
+        // Camera switching
+        cameraSelect.addEventListener('change', () => {
+            const deviceId = cameraSelect.value;
+            if (deviceId) {
+                startCamera(deviceId, null);
+                showToast('📹 Cámara cambiada');
+            }
+        });
+
+        // Flip front/back (mobile)
+        flipCameraBtn.addEventListener('click', () => {
+            const newFacing = currentFacingMode === 'user' ? 'environment' : 'user';
+            currentFacingMode = newFacing;
+            startCamera(null, newFacing);
+            showToast(newFacing === 'user' ? '🤳 Cámara frontal' : '📷 Cámara trasera');
+        });
+
+        // ---- Fullscreen ----
+        fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+        function toggleFullscreen() {
+            const target = videoContainer;
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                const rfs = target.requestFullscreen || target.webkitRequestFullscreen || target.msRequestFullscreen;
+                if (rfs) rfs.call(target);
+            } else {
+                const efs = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+                if (efs) efs.call(document);
+            }
+        }
+
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+        function onFullscreenChange() {
+            isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            fullscreenBtn.title = isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa';
+            videoContainer.classList.toggle('is-fullscreen', isFullscreen);
+        }
+
+        // ---- Tracking Controls ----
+        modeBtn.addEventListener('click', () => {
+            socket.emit('change_mode');
+            showToast('🖐️ Modo cambiado');
+        });
+
+        rotationBtn.addEventListener('click', () => {
+            socket.emit('toggle_rotation');
+        });
+
+        skeletonBtn.addEventListener('click', () => {
+            socket.emit('toggle_skeleton');
+        });
+
+        // ---- Frame Streaming ----
+        function startStreaming() {
+            function sendFrame() {
+                if (!streaming || !socket || !socket.connected) {
+                    requestAnimationFrame(sendFrame);
+                    return;
+                }
+
+                if (waitingForResponse) {
+                    requestAnimationFrame(sendFrame);
+                    return;
+                }
+
+                hidCtx.drawImage(sourceVideo, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                const dataUrl = hiddenCanvas.toDataURL('image/jpeg', 0.65);
+
+                waitingForResponse = true;
+                socket.emit('video_frame', { frame: dataUrl });
+
+                requestAnimationFrame(sendFrame);
+            }
+            requestAnimationFrame(sendFrame);
+        }
+
+        // ---- FPS Counter ----
+        function startFPSCounter() {
+            fpsInterval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = (now - lastFpsTime) / 1000;
+                const fps = Math.round(frameCount / elapsed);
+                fpsBadge.textContent = fps + ' FPS';
+                frameCount = 0;
+                lastFpsTime = now;
+            }, 1000);
+        }
+
+        // ---- Controls ----
+        intensitySlider.addEventListener('input', () => {
+            intensity = parseInt(intensitySlider.value, 10);
+            intensityValue.textContent = intensity;
+        });
+
+        let intensityTimeout = null;
+        intensitySlider.addEventListener('change', () => {
+            clearTimeout(intensityTimeout);
+            intensityTimeout = setTimeout(() => {
+                socket.emit('change_intensity', { intensity: intensity });
+            }, 100);
+        });
+
+        // Capture screenshot
+        captureBtn.addEventListener('click', () => {
+            if (!streaming) return;
+
+            videoContainer.classList.add('flash');
+            setTimeout(() => videoContainer.classList.remove('flash'), 400);
+
+            const link = document.createElement('a');
+            link.download = `visor_roto_${Date.now()}.jpg`;
+            link.href = outputCanvas.toDataURL('image/jpeg', 0.92);
+            link.click();
+
+            showToast('📸 Captura guardada');
+        });
+
+        // Start camera button
+        startCameraBtn.addEventListener('click', () => startCamera(null, 'user'));
+
+        // Initial camera enumeration
+        enumerateCameras();
+
+        // ---- Toast ----
+        let toastTimer = null;
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2200);
+        }
+
+        // ---- Keyboard shortcuts ----
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+            const keys = Object.keys(effectsData);
+            const idx = keys.indexOf(currentEffect);
+
+            if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                e.preventDefault();
+                const newIdx = (idx - 1 + keys.length) % keys.length;
+                const newEffect = keys[newIdx];
+                currentEffect = newEffect;
+                socket.emit('change_effect', { effect: newEffect });
+                updateActiveCard();
+                updateCurrentEffectDisplay();
+                showToast(`${effectsData[newEffect].emoji} ${effectsData[newEffect].name}`);
+                document.getElementById('effectCard_' + newEffect)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                const newIdx = (idx + 1) % keys.length;
+                const newEffect = keys[newIdx];
+                currentEffect = newEffect;
+                socket.emit('change_effect', { effect: newEffect });
+                updateActiveCard();
+                updateCurrentEffectDisplay();
+                showToast(`${effectsData[newEffect].emoji} ${effectsData[newEffect].name}`);
+                document.getElementById('effectCard_' + newEffect)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } else if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
+                captureBtn.click();
+            } else if (e.key === 'f' && !e.ctrlKey && !e.metaKey) {
+                toggleFullscreen();
+            } else if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+                if (availableCameras.length > 1) {
+                    const camIdx = availableCameras.findIndex(c => c.deviceId === currentDeviceId);
+                    const nextIdx = (camIdx + 1) % availableCameras.length;
+                    const nextId = availableCameras[nextIdx].deviceId;
+                    cameraSelect.value = nextId;
+                    startCamera(nextId, null);
+                    showToast('📹 Cámara cambiada');
+                }
+            } else if (e.key === 'm') {
+                modeBtn.click();
+            } else if (e.key === 'r') {
+                rotationBtn.click();
+            } else if (e.key === 'h') {
+                skeletonBtn.click();
+            }
+        });
+
+        // ---- Init ----
+        connectSocket();
+
+    })();
+    </script>
+
+</body>
+</html>
