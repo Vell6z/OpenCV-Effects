@@ -390,10 +390,102 @@ def handle_toggle_rotation(data=None):
     emit("state_update", get_state_payload())
 
 
+def get_local_ip():
+    """Obtiene la IP local de la maquina en la red."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def ensure_ssl_certificates():
+    """Verifica o genera certificados SSL autofirmados con SAN para localhost e IP local."""
+    import os
+    cert_path = os.path.join(os.path.dirname(__file__), "cert.pem")
+    key_path = os.path.join(os.path.dirname(__file__), "key.pem")
+
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        return cert_path, key_path
+
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    local_ip = get_local_ip()
+
+    san_list = [
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+    ]
+    if local_ip != "127.0.0.1":
+        san_list.append(x509.IPAddress(ipaddress.ip_address(local_ip)))
+
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "CO"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Visor Roto"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "Visor Roto Local"),
+    ])
+
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650))
+        .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    with open(key_path, "wb") as f:
+        f.write(key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+
+    return cert_path, key_path
+
+
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  Visor Roto — Web Effects Server (con Hand Tracking)")
-    print("  Abre http://localhost:5000 en tu navegador")
-    print("  (o usa tu IP local para acceder desde otros dispositivos)")
-    print("=" * 60)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
+    import ssl
+
+    cert_file, key_file = ensure_ssl_certificates()
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(cert_file, key_file)
+
+    local_ip = get_local_ip()
+
+    print("=" * 65)
+    print("  Visor Roto -- Web Effects Server (HTTPS)")
+    print(f"  En tu PC:      https://localhost:5000")
+    print(f"  En tu iPhone:  https://{local_ip}:5000")
+    print("=" * 65)
+    print("  PASO IMPORTANTE EN IPHONE (Safari):")
+    print(f"  1. En Safari abre con https:// (https://{local_ip}:5000)")
+    print("  2. Toca 'Mostrar detalles' -> 'Visitar este sitio web'")
+    print("  3. Permite el acceso a la camara cuando Safari lo pida.")
+    print("=" * 65)
+
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=5000,
+        debug=False,
+        allow_unsafe_werkzeug=True,
+        ssl_context=ssl_ctx,
+    )

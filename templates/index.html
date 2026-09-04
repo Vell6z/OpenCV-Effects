@@ -299,6 +299,10 @@
         // ---- Camera ----
         async function enumerateCameras() {
             try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                    console.warn('mediaDevices not available (requires HTTPS or localhost)');
+                    return;
+                }
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 availableCameras = devices.filter(d => d.kind === 'videoinput');
                 cameraSelect.innerHTML = '';
@@ -327,6 +331,10 @@
 
         async function startCamera(deviceId, facingMode) {
             try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    showToast('🔒 En iPhone/móvil debes abrir con HTTPS (https://' + window.location.hostname + ':5000)');
+                    return;
+                }
                 stopCurrentStream();
 
                 const videoConstraints = {
