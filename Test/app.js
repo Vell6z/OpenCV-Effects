@@ -43,6 +43,7 @@ import {
     const targetBtn = document.getElementById('targetBtn');
     const targetIcon = document.getElementById('targetIcon');
     const targetLabel = document.getElementById('targetLabel');
+    const targetBadge = document.getElementById('targetBadge');
     const modeBtn = document.getElementById('modeBtn');
     const modeIcon = document.getElementById('modeIcon');
     const modeLabel = document.getElementById('modeLabel');
@@ -584,17 +585,19 @@ import {
         if (targetMode === 'body') {
             targetBtn.classList.add('active');
             targetIcon.textContent = '🧍';
-            targetLabel.textContent = 'Cuerpo';
+            targetLabel.textContent = 'Cuerpo: ON';
+            if (targetBadge) targetBadge.textContent = 'ON';
             modeIcon.textContent = '👤';
             modeLabel.textContent = BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]];
-            showToast('🧍 Objetivo: Detección de Persona / Cuerpo');
+            showToast('🧍 Modo Cuerpo ACTIVADO — encierra a la persona');
         } else {
-            targetBtn.classList.add('active');
+            targetBtn.classList.remove('active');
             targetIcon.textContent = '🖐️';
-            targetLabel.textContent = 'Manos';
+            targetLabel.textContent = 'Modo Cuerpo';
+            if (targetBadge) targetBadge.textContent = 'OFF';
             modeIcon.textContent = '🎯';
             modeLabel.textContent = MODE_LABELS[MODES[modeIndex]];
-            showToast('🖐️ Objetivo: Detección de Manos');
+            showToast('🖐️ Modo Manos ACTIVADO — visor de dedos');
         }
     }
 

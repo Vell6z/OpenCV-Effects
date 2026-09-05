@@ -40,6 +40,8 @@ from hand_tracking import (
     rotated_rect_from_hands, get_rotated_patch, paste_rotated_patch,
     draw_broken_glass_border, compute_box,
     MODES, MODE_LABELS,
+    BODY_MODES, BODY_MODE_LABELS,
+    box_from_pose, rotated_rect_from_pose,
 )
 
 from config import (
@@ -52,8 +54,9 @@ app.config["SECRET_KEY"] = "visor-roto-secret"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10 * 1024 * 1024)
 
-# ---- MediaPipe Hands (se inicializa una vez) ----
+# ---- MediaPipe Hands & Pose (se inicializa una vez) ----
 mp_hands = mp.solutions.hands
+mp_pose = mp.solutions.pose
 mp_draw = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
 mp_selfie = mp.solutions.selfie_segmentation
@@ -61,6 +64,12 @@ mp_selfie = mp.solutions.selfie_segmentation
 hands_detector = mp_hands.Hands(
     model_complexity=0,
     max_num_hands=2,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+)
+
+pose_detector = mp_pose.Pose(
+    model_complexity=0,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
 )
@@ -168,6 +177,7 @@ current_intensity = DEFAULT_INTENSITY
 mode_idx = DEFAULT_MODE_INDEX
 show_skeleton = SHOW_HAND_SKELETON
 allow_rotation = ALLOW_ROTATION
+is_body_mode = False
 
 # Smoothers (persistentes entre frames para suavizar el cuadro)
 smoother = SmoothBox()
@@ -196,15 +206,15 @@ def encode_frame(frame, quality=60):
 
 
 def process_frame_with_hands(frame, effect_key, intensity):
-    """Procesa un frame: detecta manos, calcula el recuadro, aplica el
-    efecto SOLO dentro del recuadro (igual que run_effect.py)."""
-    global last_box, last_rot_state, smoother, rot_smoother, frame_infer_count, cached_results
+    """Procesa un frame: detecta manos o cuerpo (según is_body_mode), calcula el recuadro,
+    y aplica el efecto SOLO dentro del recuadro encerrando a la persona o las manos."""
+    global last_box, last_rot_state, smoother, rot_smoother, frame_infer_count, cached_results, is_body_mode
 
     h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     frame_infer_count += 1
-    # Interleaved tracking: ejecutar red neuronal cada 2 frames si ya hay manos detectadas
+    # Interleaved tracking: ejecutar red neuronal cada 2 frames si ya hay detección activa
     should_run_mp = (frame_infer_count % 2 != 0) or (last_box is None and last_rot_state is None)
 
     scale_mp = 240.0 / max(w, 1)
@@ -215,15 +225,9 @@ def process_frame_with_hands(frame, effect_key, intensity):
     else:
         rgb_mp = rgb
 
-    if should_run_mp:
-        results = hands_detector.process(rgb_mp)
-        cached_results = results
-    else:
-        results = cached_results if cached_results is not None else hands_detector.process(rgb_mp)
-
     display = frame.copy()
     mode = MODES[mode_idx]
-    use_rotation = allow_rotation and mode == "encuadre_dedos"
+    use_rotation = allow_rotation
 
     # Fuente del frame (normal o thermal)
     effect_info = EFFECTS.get(effect_key, EFFECTS["posterize"])
@@ -238,25 +242,60 @@ def process_frame_with_hands(frame, effect_key, intensity):
     box = last_box
     rot_state = last_rot_state
 
-    if results.multi_hand_landmarks:
-        hands_px = [landmarks_to_px(hl, w, h) for hl in results.multi_hand_landmarks]
+    if is_body_mode:
+        # Detección del cuerpo entero con MediaPipe Pose
+        if should_run_mp:
+            results = pose_detector.process(rgb_mp)
+            cached_results = results
+        else:
+            results = cached_results if cached_results is not None else pose_detector.process(rgb_mp)
 
-        if show_skeleton:
-            for hl in results.multi_hand_landmarks:
+        if results and results.pose_landmarks:
+            pose_px = np.array([(int(lm.x * w), int(lm.y * h)) for lm in results.pose_landmarks.landmark])
+
+            if show_skeleton:
                 mp_draw.draw_landmarks(
-                    display, hl, mp_hands.HAND_CONNECTIONS,
-                    mp_styles.get_default_hand_landmarks_style(),
-                    mp_styles.get_default_hand_connections_style(),
+                    display, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
                 )
 
-        if use_rotation:
-            raw_rot = rotated_rect_from_hands(hands_px, w, h)
-            rot_state = rot_smoother.update(raw_rot)
-            last_rot_state = rot_state
+            if use_rotation:
+                raw_rot = rotated_rect_from_pose(pose_px, w, h, "cuerpo_completo")
+                if raw_rot is not None:
+                    rot_state = rot_smoother.update(raw_rot)
+                    last_rot_state = rot_state
+            else:
+                raw_box = box_from_pose(pose_px, w, h, "cuerpo_completo")
+                if raw_box is not None:
+                    box = smoother.update(raw_box)
+                    last_box = box
+    else:
+        # Detección de manos con MediaPipe Hands
+        use_rotation = allow_rotation and mode == "encuadre_dedos"
+        if should_run_mp:
+            results = hands_detector.process(rgb_mp)
+            cached_results = results
         else:
-            raw_box = compute_box(mode, hands_px, w, h)
-            box = smoother.update(raw_box)
-            last_box = box
+            results = cached_results if cached_results is not None else hands_detector.process(rgb_mp)
+
+        if results and results.multi_hand_landmarks:
+            hands_px = [landmarks_to_px(hl, w, h) for hl in results.multi_hand_landmarks]
+
+            if show_skeleton:
+                for hl in results.multi_hand_landmarks:
+                    mp_draw.draw_landmarks(
+                        display, hl, mp_hands.HAND_CONNECTIONS,
+                        mp_styles.get_default_hand_landmarks_style(),
+                        mp_styles.get_default_hand_connections_style(),
+                    )
+
+            if use_rotation:
+                raw_rot = rotated_rect_from_hands(hands_px, w, h)
+                rot_state = rot_smoother.update(raw_rot)
+                last_rot_state = rot_state
+            else:
+                raw_box = compute_box(mode, hands_px, w, h)
+                box = smoother.update(raw_box)
+                last_box = box
 
     # ---- Aplicar efecto en el recuadro ----
     if use_rotation and rot_state is not None:
@@ -302,8 +341,9 @@ def process_frame_with_hands(frame, effect_key, intensity):
                 cv2.line(display, (cx, cy), (cx, cy + dy * corner_len), (0, 255, 255), 3)
 
     # HUD
+    hud_label = "Modo: CUERPO COMPLETO" if is_body_mode else MODE_LABELS[MODES[mode_idx]]
     hud_lines = [
-        MODE_LABELS[MODES[mode_idx]] + (" [rotando]" if use_rotation else ""),
+        hud_label + (" [rotando]" if use_rotation else ""),
         f"Efecto: {effect_key}  (intensidad: {intensity})",
     ]
     y_off = 25
@@ -330,8 +370,9 @@ def get_state_payload():
     return {
         "effect": current_effect,
         "intensity": current_intensity,
+        "is_body_mode": is_body_mode,
         "mode_idx": mode_idx,
-        "mode_label": MODE_LABELS[MODES[mode_idx]],
+        "mode_label": "Cuerpo completo" if is_body_mode else MODE_LABELS[MODES[mode_idx]],
         "modes": [{"key": m, "label": MODE_LABELS[m]} for m in MODES],
         "show_skeleton": show_skeleton,
         "allow_rotation": allow_rotation,
@@ -407,6 +448,18 @@ def handle_change_mode(data=None):
     last_box = None
     last_rot_state = None
     emit("state_update", get_state_payload())
+
+
+@socketio.on("toggle_body_mode")
+def handle_toggle_body_mode(data=None):
+    global is_body_mode, smoother, rot_smoother, last_box, last_rot_state, cached_results
+    is_body_mode = not is_body_mode
+    smoother = SmoothBox()
+    rot_smoother = SmoothRotBox()
+    last_box = None
+    last_rot_state = None
+    cached_results = None
+    emit("state_update", get_state_payload(), broadcast=True)
 
 
 @socketio.on("toggle_skeleton")

@@ -97,6 +97,14 @@
 
             <!-- Tracking Controls Bar -->
             <div class="controls-bar tracking-controls" id="trackingControls">
+                <button class="btn-control" id="bodyBtn" title="Activar / Desactivar detección de Cuerpo (t)">
+                    <span class="btn-control__icon" id="bodyIcon">🧍</span>
+                    <span class="btn-control__text" id="bodyBtnText">Modo Cuerpo</span>
+                    <span class="btn-control__badge" id="bodyBadge">OFF</span>
+                </button>
+
+                <span class="controls-bar__separator"></span>
+
                 <button class="btn-control" id="modeBtn" title="Cambiar modo de encuadre (m)">
                     <span class="btn-control__icon">🖐️</span>
                     <span class="btn-control__text" id="modeLabel">Visor de dedos</span>
@@ -110,7 +118,7 @@
                     <span class="btn-control__badge" id="rotationBadge">ON</span>
                 </button>
 
-                <button class="btn-control" id="skeletonBtn" title="Mostrar/ocultar esqueleto de manos (h)">
+                <button class="btn-control" id="skeletonBtn" title="Mostrar/ocultar esqueleto de manos/cuerpo (h)">
                     <span class="btn-control__icon">🦴</span>
                     <span class="btn-control__text">Esqueleto</span>
                     <span class="btn-control__badge" id="skeletonBadge">OFF</span>
@@ -176,6 +184,9 @@
         const cameraSelect = document.getElementById('cameraSelect');
         const flipCameraBtn = document.getElementById('flipCameraBtn');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
+        const bodyBtn = document.getElementById('bodyBtn');
+        const bodyBtnText = document.getElementById('bodyBtnText');
+        const bodyBadge = document.getElementById('bodyBadge');
         const modeBtn = document.getElementById('modeBtn');
         const modeLabel = document.getElementById('modeLabel');
         const rotationBtn = document.getElementById('rotationBtn');
@@ -247,6 +258,11 @@
                     intensity = data.intensity;
                     intensitySlider.value = intensity;
                     intensityValue.textContent = intensity;
+                }
+                if (data.is_body_mode !== undefined) {
+                    bodyBadge.textContent = data.is_body_mode ? 'ON' : 'OFF';
+                    bodyBtn.classList.toggle('active', data.is_body_mode);
+                    bodyBtnText.textContent = data.is_body_mode ? 'Cuerpo: ON' : 'Modo Cuerpo';
                 }
                 if (data.mode_label) {
                     modeLabel.textContent = data.mode_label;
@@ -503,6 +519,12 @@
         }
 
         // ---- Tracking Controls ----
+        bodyBtn.addEventListener('click', () => {
+            socket.emit('toggle_body_mode');
+            const willBeOn = bodyBadge.textContent === 'OFF';
+            showToast(willBeOn ? '🧍 Activando detección de Cuerpo' : '🖐️ Activando detección de Manos');
+        });
+
         modeBtn.addEventListener('click', () => {
             socket.emit('change_mode');
             showToast('🖐️ Modo cambiado');
@@ -757,6 +779,8 @@
                 updateCurrentEffectDisplay();
                 showToast(`${effectsData[newEffect].emoji} ${effectsData[newEffect].name}`);
                 document.getElementById('effectCard_' + newEffect)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } else if (e.key === 't' && !e.ctrlKey && !e.metaKey) {
+                bodyBtn.click();
             } else if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
                 captureBtn.click();
             } else if (e.key === 'v' && !e.ctrlKey && !e.metaKey) {
