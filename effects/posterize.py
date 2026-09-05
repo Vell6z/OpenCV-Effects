@@ -36,11 +36,8 @@ def posterize_duotone(patch, n_colors=4, palette=None):
     bins = np.linspace(0, 256, n_levels + 1)
     level_idx = np.digitize(gray, bins[1:-1], right=True)
 
-    out = np.zeros_like(patch)
-    for i, color in enumerate(palette):
-        mask = level_idx == i
-        out[mask] = color
-
+    palette_arr = np.array(palette, dtype=np.uint8)
+    out = palette_arr[level_idx]
     return out
 
 
@@ -48,9 +45,14 @@ def add_halftone_texture(patch, dot_spacing=6, strength=0.25):
     """Textura sutil tipo trama de puntos (halftone) para reforzar el look
     de impresion serigrafica del posterizado."""
     h, w = patch.shape[:2]
-    yy, xx = np.mgrid[0:h, 0:w]
-    pattern = ((xx // dot_spacing + yy // dot_spacing) % 2) * strength
-    pattern = (pattern * 255).astype(np.uint8)
+    tile_size = max(2, dot_spacing * 2)
+    block = np.zeros((tile_size, tile_size), dtype=np.uint8)
+    val = int(strength * 255)
+    block[:dot_spacing, :dot_spacing] = val
+    block[dot_spacing:, dot_spacing:] = val
+    reps_y = (h + tile_size - 1) // tile_size
+    reps_x = (w + tile_size - 1) // tile_size
+    pattern = np.tile(block, (reps_y, reps_x))[:h, :w]
     pattern_bgr = cv2.merge([pattern, pattern, pattern])
     return cv2.subtract(patch, pattern_bgr)
 

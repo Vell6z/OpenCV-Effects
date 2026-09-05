@@ -47,6 +47,13 @@
                     </button>
                 </div>
 
+                <!-- Live recording badge overlay -->
+                <div class="rec-overlay-badge" id="recOverlayBadge">
+                    <span class="btn-record__dot"></span>
+                    <span>REC</span>
+                    <span id="recOverlayTimer">00:00</span>
+                </div>
+
                 <!-- Placeholder before camera starts -->
                 <div class="video-placeholder" id="videoPlaceholder">
                     <div class="video-placeholder__icon">🤲</div>
@@ -76,9 +83,14 @@
                     <input type="range" id="intensitySlider" min="5" max="200" value="85" step="1">
                     <span class="controls-bar__value" id="intensityValue">85</span>
                 </div>
-                <button class="btn-capture" id="captureBtn" title="Guardar captura">
+                <button class="btn-capture" id="captureBtn" title="Guardar foto (JPG)">
                     <span class="btn-capture__icon">📸</span>
-                    <span>Captura</span>
+                    <span>Foto</span>
+                </button>
+                <button class="btn-record" id="recordBtn" title="Grabar video (MP4/WebM)">
+                    <span class="btn-record__dot"></span>
+                    <span id="recordBtnText">Grabar</span>
+                    <span class="record-timer" id="recordTimer" style="display:none;">00:00</span>
                 </button>
                 <span class="fps-badge" id="fpsBadge">— FPS</span>
             </div>
@@ -150,6 +162,11 @@
         const intensitySlider = document.getElementById('intensitySlider');
         const intensityValue = document.getElementById('intensityValue');
         const captureBtn = document.getElementById('captureBtn');
+        const recordBtn = document.getElementById('recordBtn');
+        const recordBtnText = document.getElementById('recordBtnText');
+        const recordTimer = document.getElementById('recordTimer');
+        const recOverlayBadge = document.getElementById('recOverlayBadge');
+        const recOverlayTimer = document.getElementById('recOverlayTimer');
         const fpsBadge = document.getElementById('fpsBadge');
         const effectsList = document.getElementById('effectsList');
         const effectCount = document.getElementById('effectCount');
@@ -179,16 +196,29 @@
         let fpsInterval = null;
         let lastFpsTime = Date.now();
         let waitingForResponse = false;
+        let inFlight = 0;
+        const MAX_IN_FLIGHT = 2;
+        let lastSendTime = 0;
+        const TARGET_FPS = 45;
+        const MIN_FRAME_INTERVAL = 1000 / TARGET_FPS;
         let availableCameras = [];
         let currentDeviceId = null;
         let currentFacingMode = 'user';
         let isFullscreen = false;
         let streamingLoopStarted = false;
 
+        // ---- Recording State ----
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+        let recordingStartTime = 0;
+        let recordingTimerInterval = null;
+
         // ---- Socket.IO Connection ----
         function connectSocket() {
             socket = io({
-                transports: ['websocket', 'polling'],
+                transports: ['websocket'],
+                upgrade: false,
                 reconnection: true,
                 reconnectionDelay: 1000,
             });
@@ -231,17 +261,58 @@
                 }
             });
 
-            socket.on('processed_frame', (data) => {
-                waitingForResponse = false;
-                if (!data.frame) return;
-                const img = new Image();
-                img.onload = () => {
-                    outputCanvas.width = img.width;
-                    outputCanvas.height = img.height;
-                    outCtx.drawImage(img, 0, 0);
-                    frameCount++;
-                };
-                img.src = data.frame;
+            socket.on('processed_frame', async (data) => {
+                inFlight = Math.max(0, inFlight - 1);
+                if (!data) return;
+
+                try {
+                    let blob = null;
+                    if (data instanceof Blob) {
+                        blob = data;
+                    } else if (data instanceof ArrayBuffer) {
+                        blob = new Blob([data], { type: 'image/jpeg' });
+                    } else if (data && data.frame) {
+                        const img = new Image();
+                        img.onload = () => {
+                            if (outputCanvas.width !== img.width || outputCanvas.height !== img.height) {
+                                outputCanvas.width = img.width;
+                                outputCanvas.height = img.height;
+                            }
+                            outCtx.drawImage(img, 0, 0);
+                            frameCount++;
+                        };
+                        img.src = data.frame;
+                        return;
+                    }
+
+                    if (blob) {
+                        if (window.createImageBitmap) {
+                            const bitmap = await createImageBitmap(blob);
+                            if (outputCanvas.width !== bitmap.width || outputCanvas.height !== bitmap.height) {
+                                outputCanvas.width = bitmap.width;
+                                outputCanvas.height = bitmap.height;
+                            }
+                            outCtx.drawImage(bitmap, 0, 0);
+                            bitmap.close();
+                            frameCount++;
+                        } else {
+                            const url = URL.createObjectURL(blob);
+                            const img = new Image();
+                            img.onload = () => {
+                                if (outputCanvas.width !== img.width || outputCanvas.height !== img.height) {
+                                    outputCanvas.width = img.width;
+                                    outputCanvas.height = img.height;
+                                }
+                                outCtx.drawImage(img, 0, 0);
+                                URL.revokeObjectURL(url);
+                                frameCount++;
+                            };
+                            img.src = url;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Frame render error:', err);
+                }
             });
         }
 
@@ -362,10 +433,15 @@
                 }
 
                 sourceVideo.addEventListener('loadedmetadata', () => {
-                    hiddenCanvas.width = sourceVideo.videoWidth;
-                    hiddenCanvas.height = sourceVideo.videoHeight;
-                    outputCanvas.width = sourceVideo.videoWidth;
-                    outputCanvas.height = sourceVideo.videoHeight;
+                    const maxStreamW = 480;
+                    const vW = sourceVideo.videoWidth || 640;
+                    const vH = sourceVideo.videoHeight || 480;
+                    const scale = Math.min(1.0, maxStreamW / vW);
+
+                    hiddenCanvas.width = Math.round(vW * scale);
+                    hiddenCanvas.height = Math.round(vH * scale);
+                    outputCanvas.width = hiddenCanvas.width;
+                    outputCanvas.height = hiddenCanvas.height;
 
                     videoPlaceholder.classList.add('hidden');
                     streaming = true;
@@ -442,22 +518,31 @@
 
         // ---- Frame Streaming ----
         function startStreaming() {
-            function sendFrame() {
+            function sendFrame(timestamp) {
                 if (!streaming || !socket || !socket.connected) {
                     requestAnimationFrame(sendFrame);
                     return;
                 }
 
-                if (waitingForResponse) {
-                    requestAnimationFrame(sendFrame);
-                    return;
+                const elapsed = timestamp - lastSendTime;
+                if (inFlight < MAX_IN_FLIGHT && elapsed >= MIN_FRAME_INTERVAL) {
+                    lastSendTime = timestamp;
+                    inFlight++;
+                    hidCtx.drawImage(sourceVideo, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                    
+                    if (hiddenCanvas.toBlob) {
+                        hiddenCanvas.toBlob((blob) => {
+                            if (blob && socket && socket.connected) {
+                                socket.emit('video_frame', blob);
+                            } else {
+                                inFlight = Math.max(0, inFlight - 1);
+                            }
+                        }, 'image/jpeg', 0.52);
+                    } else {
+                        const dataUrl = hiddenCanvas.toDataURL('image/jpeg', 0.52);
+                        socket.emit('video_frame', { frame: dataUrl });
+                    }
                 }
-
-                hidCtx.drawImage(sourceVideo, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-                const dataUrl = hiddenCanvas.toDataURL('image/jpeg', 0.65);
-
-                waitingForResponse = true;
-                socket.emit('video_frame', { frame: dataUrl });
 
                 requestAnimationFrame(sendFrame);
             }
@@ -505,6 +590,129 @@
             showToast('📸 Captura guardada');
         });
 
+        // ---- Video Recording (MediaRecorder en Canvas) ----
+        function getSupportedMimeType() {
+            const types = [
+                'video/mp4;codecs=avc1',
+                'video/mp4',
+                'video/webm;codecs=h264',
+                'video/webm;codecs=vp9',
+                'video/webm;codecs=vp8',
+                'video/webm'
+            ];
+            for (const type of types) {
+                if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) {
+                    return type;
+                }
+            }
+            return '';
+        }
+
+        function toggleRecording() {
+            if (!streaming) {
+                showToast('⚠️ Inicia la cámara antes de grabar');
+                return;
+            }
+
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        function startRecording() {
+            if (!outputCanvas.captureStream) {
+                showToast('⚠️ Tu navegador no permite grabar canvas directamente');
+                return;
+            }
+
+            try {
+                const mimeType = getSupportedMimeType();
+                const stream = outputCanvas.captureStream(30);
+                const options = mimeType ? { mimeType } : {};
+
+                recordedChunks = [];
+                mediaRecorder = new MediaRecorder(stream, options);
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const isMp4 = mimeType && mimeType.includes('mp4');
+                    const ext = isMp4 ? 'mp4' : 'webm';
+                    const blob = new Blob(recordedChunks, { type: mimeType || 'video/webm' });
+
+                    if (blob.size === 0) {
+                        showToast('⚠️ No se capturaron datos');
+                        return;
+                    }
+
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.style.display = 'none';
+                    link.href = url;
+                    link.download = `visor_roto_video_${Date.now()}.${ext}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    setTimeout(() => {
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(url);
+                    }, 2000);
+
+                    showToast('💾 Video descargado a tu memoria');
+                };
+
+                mediaRecorder.start(250); // Genera fragmentos cada 250ms
+                isRecording = true;
+                recordBtn.classList.add('is-recording');
+                recOverlayBadge.classList.add('active');
+                recordBtnText.textContent = 'Detener';
+                startRecordingTimer();
+                showToast('🔴 Grabando video...');
+            } catch (err) {
+                console.error('Recording error:', err);
+                showToast('⚠️ Error al grabar: ' + err.message);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            isRecording = false;
+            recordBtn.classList.remove('is-recording');
+            recOverlayBadge.classList.remove('active');
+            recordBtnText.textContent = 'Grabar';
+            stopRecordingTimer();
+        }
+
+        function startRecordingTimer() {
+            recordingStartTime = Date.now();
+            updateTimerText();
+            recordingTimerInterval = setInterval(updateTimerText, 1000);
+        }
+
+        function updateTimerText() {
+            const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+            const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const s = String(elapsed % 60).padStart(2, '0');
+            const timeStr = `${m}:${s}`;
+            recOverlayTimer.textContent = timeStr;
+            recordTimer.textContent = timeStr;
+            recordTimer.style.display = 'inline';
+        }
+
+        function stopRecordingTimer() {
+            clearInterval(recordingTimerInterval);
+            recordTimer.style.display = 'none';
+        }
+
+        recordBtn.addEventListener('click', toggleRecording);
+
         // Start camera button
         startCameraBtn.addEventListener('click', () => startCamera(null, 'user'));
 
@@ -551,6 +759,8 @@
                 document.getElementById('effectCard_' + newEffect)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             } else if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
                 captureBtn.click();
+            } else if (e.key === 'v' && !e.ctrlKey && !e.metaKey) {
+                recordBtn.click();
             } else if (e.key === 'f' && !e.ctrlKey && !e.metaKey) {
                 toggleFullscreen();
             } else if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {

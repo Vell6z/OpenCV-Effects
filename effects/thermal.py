@@ -49,8 +49,8 @@ def build_thermal_frame(frame_bgr, seg_mask_float):
 
     thermal = thermal_colorize(heat)
 
-    # leve ruido tipo sensor termico real, para que no se vea plano
-    noise = np.random.normal(0, 4, thermal.shape).astype(np.int16)
+    # leve ruido tipo sensor termico real (generacion entera rapida)
+    noise = np.random.randint(-4, 5, thermal.shape, dtype=np.int16)
     thermal = np.clip(thermal.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
     return thermal

@@ -383,6 +383,95 @@ input[type="range"]::-moz-range-thumb {
     font-size: 1rem;
 }
 
+/* Record Video Button */
+.btn-record {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 1.1rem;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: var(--bg-glass);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+
+.btn-record:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: #ff3366;
+    color: #ff3366;
+    box-shadow: 0 0 12px rgba(255, 51, 102, 0.2);
+}
+
+.btn-record.is-recording {
+    background: rgba(255, 51, 102, 0.15);
+    border-color: #ff3366;
+    color: #ff3366;
+    box-shadow: 0 0 16px rgba(255, 51, 102, 0.4);
+    animation: record-pulse 1.5s infinite;
+}
+
+.btn-record__dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ff3366;
+    display: inline-block;
+    transition: all var(--transition-fast);
+}
+
+.btn-record.is-recording .btn-record__dot {
+    animation: blink-dot 1s ease-in-out infinite;
+}
+
+.record-timer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #ff3366;
+    margin-left: 0.15rem;
+}
+
+@keyframes record-pulse {
+    0%, 100% { border-color: rgba(255, 51, 102, 0.5); }
+    50% { border-color: rgba(255, 51, 102, 1); }
+}
+
+@keyframes blink-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.3; transform: scale(0.8); }
+}
+
+/* Floating REC overlay on video */
+.rec-overlay-badge {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(10, 10, 15, 0.82);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 51, 102, 0.5);
+    border-radius: var(--radius-xl);
+    padding: 0.35rem 0.85rem;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    z-index: 10;
+}
+
+.rec-overlay-badge.active {
+    display: flex;
+}
+
 /* FPS Counter */
 .fps-badge {
     font-family: 'JetBrains Mono', monospace;

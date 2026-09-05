@@ -59,9 +59,10 @@ mp_styles = mp.solutions.drawing_styles
 mp_selfie = mp.solutions.selfie_segmentation
 
 hands_detector = mp_hands.Hands(
+    model_complexity=0,
     max_num_hands=2,
-    min_detection_confidence=0.6,
-    min_tracking_confidence=0.6,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
 )
 
 selfie_segmentor = mp_selfie.SelfieSegmentation(model_selection=1)
@@ -173,6 +174,8 @@ smoother = SmoothBox()
 rot_smoother = SmoothRotBox()
 last_box = None
 last_rot_state = None
+frame_infer_count = 0
+cached_results = None
 
 
 def decode_frame(data_url):
@@ -184,7 +187,7 @@ def decode_frame(data_url):
     return frame
 
 
-def encode_frame(frame, quality=75):
+def encode_frame(frame, quality=60):
     """Codifica un frame BGR de OpenCV a JPEG base64 data URL."""
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
     _, buffer = cv2.imencode(".jpg", frame, encode_params)
@@ -195,11 +198,28 @@ def encode_frame(frame, quality=75):
 def process_frame_with_hands(frame, effect_key, intensity):
     """Procesa un frame: detecta manos, calcula el recuadro, aplica el
     efecto SOLO dentro del recuadro (igual que run_effect.py)."""
-    global last_box, last_rot_state, smoother, rot_smoother
+    global last_box, last_rot_state, smoother, rot_smoother, frame_infer_count, cached_results
 
     h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands_detector.process(rgb)
+
+    frame_infer_count += 1
+    # Interleaved tracking: ejecutar red neuronal cada 2 frames si ya hay manos detectadas
+    should_run_mp = (frame_infer_count % 2 != 0) or (last_box is None and last_rot_state is None)
+
+    scale_mp = 240.0 / max(w, 1)
+    if scale_mp < 1.0:
+        w_mp = 240
+        h_mp = max(1, int(h * scale_mp))
+        rgb_mp = cv2.resize(rgb, (w_mp, h_mp), interpolation=cv2.INTER_NEAREST)
+    else:
+        rgb_mp = rgb
+
+    if should_run_mp:
+        results = hands_detector.process(rgb_mp)
+        cached_results = results
+    else:
+        results = cached_results if cached_results is not None else hands_detector.process(rgb_mp)
 
     display = frame.copy()
     mode = MODES[mode_idx]
@@ -209,8 +229,8 @@ def process_frame_with_hands(frame, effect_key, intensity):
     effect_info = EFFECTS.get(effect_key, EFFECTS["posterize"])
     source_frame = frame
     if effect_info["needs_segmentation"] and effect_key == "thermal":
-        seg_result = selfie_segmentor.process(rgb)
-        seg_mask = seg_result.segmentation_mask
+        seg_result = selfie_segmentor.process(rgb_mp)
+        seg_mask = cv2.resize(seg_result.segmentation_mask, (w, h), interpolation=cv2.INTER_LINEAR)
         source_frame = build_thermal_frame(frame, seg_mask)
 
     process_func = effect_info["func"]
@@ -331,20 +351,33 @@ def handle_connect():
 @socketio.on("video_frame")
 def handle_video_frame(data):
     try:
-        frame = decode_frame(data["frame"])
+        # Soporte para datos binarios crudos (bytes) y fallback Base64
+        if isinstance(data, (bytes, bytearray)):
+            np_arr = np.frombuffer(data, dtype=np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        elif isinstance(data, dict) and "frame" in data:
+            frame = decode_frame(data["frame"])
+        elif isinstance(data, str):
+            frame = decode_frame(data)
+        else:
+            return
+
         if frame is None:
             return
 
-        # Redimensionar para rendimiento (max 640px ancho)
+        # Redimensionar para rendimiento (max 480px ancho)
         h, w = frame.shape[:2]
-        max_w = 640
+        max_w = 480
         if w > max_w:
             scale = max_w / w
-            frame = cv2.resize(frame, (max_w, int(h * scale)))
+            frame = cv2.resize(frame, (max_w, int(h * scale)), interpolation=cv2.INTER_LINEAR)
 
         processed = process_frame_with_hands(frame, current_effect, current_intensity)
-        result_data = encode_frame(processed, quality=70)
-        emit("processed_frame", {"frame": result_data})
+
+        # Codificar a JPEG binario puro (sin base64) para máxima velocidad
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
+        _, buffer = cv2.imencode(".jpg", processed, encode_params)
+        emit("processed_frame", buffer.tobytes())
     except Exception as e:
         print(f"Error processing frame: {e}")
 
