@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Visor Roto — Web Edition (Serverless 60 FPS)</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands & Camera Utils vía CDN (Oficial Google) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="brand">
+            <span class="brand__logo">⚡</span>
+            <h1 class="brand__title">Visor Roto</h1>
+            <span class="badge-tag">Serverless 60 FPS</span>
+        </div>
+        <div class="header-status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Listo</span>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="app-container">
+
+        <!-- Video Section -->
+        <section class="video-section">
+
+            <div class="video-container" id="videoContainer">
+                <canvas id="outputCanvas"></canvas>
+                <video id="sourceVideo" autoplay playsinline muted></video>
+
+                <!-- Floating Video Overlay Controls -->
+                <div class="video-overlay-controls">
+                    <button class="btn-overlay" id="flipCameraBtn" title="Cambiar cámara frontal/trasera">🔄</button>
+                    <button class="btn-overlay" id="fullscreenBtn" title="Pantalla completa">⛶</button>
+                </div>
+
+                <!-- Floating REC Badge -->
+                <div class="rec-overlay-badge" id="recOverlayBadge">
+                    <span class="rec-dot"></span>
+                    <span>REC</span>
+                    <span id="recOverlayTimer">00:00</span>
+                </div>
+
+                <!-- Placeholder -->
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <div class="video-placeholder__icon">🤲</div>
+                    <p class="video-placeholder__text">
+                        Enciende tu cámara y forma un visor con los dedos pulgar e índice o ambas manos.
+                    </p>
+                    <button class="video-placeholder__btn" id="startCameraBtn">
+                        Iniciar Cámara
+                    </button>
+                </div>
+            </div>
+
+            <!-- Controls Toolbar 1 -->
+            <div class="controls-bar">
+                <div class="camera-select-wrapper">
+                    <label class="controls-bar__label" for="cameraSelect">📹</label>
+                    <select id="cameraSelect" class="camera-select" title="Seleccionar cámara">
+                        <option value="">Cargando cámaras…</option>
+                    </select>
+                </div>
+
+                <span class="controls-bar__separator"></span>
+
+                <span class="controls-bar__label">Intensidad</span>
+                <div class="slider-wrapper">
+                    <input type="range" id="intensitySlider" min="5" max="200" value="85" step="1">
+                    <span class="controls-bar__value" id="intensityValue">85</span>
+                </div>
+
+                <button class="btn-capture" id="captureBtn" title="Guardar foto (JPG)">
+                    <span>📸</span>
+                    <span>Foto</span>
+                </button>
+
+                <button class="btn-record" id="recordBtn" title="Grabar video (MP4/WebM)">
+                    <span class="rec-dot"></span>
+                    <span id="recordBtnText">Grabar</span>
+                    <span class="record-timer" id="recordTimer" style="display:none;">00:00</span>
+                </button>
+
+                <span class="fps-badge" id="fpsBadge">60 FPS</span>
+            </div>
+
+            <!-- Controls Toolbar 2 (Tracking) -->
+            <div class="controls-bar">
+                <button class="btn-control" id="modeBtn" title="Cambiar modo de encuadre (m)">
+                    <span>🖐️</span>
+                    <span id="modeLabel">Visor de dedos</span>
+                </button>
+
+                <span class="controls-bar__separator"></span>
+
+                <button class="btn-control active" id="rotationBtn" title="Girar visor con el ángulo de los dedos (r)">
+                    <span>🔄</span>
+                    <span>Rotación</span>
+                    <span class="btn-control__badge" id="rotationBadge">ON</span>
+                </button>
+
+                <button class="btn-control" id="skeletonBtn" title="Mostrar/ocultar esqueleto de dedos (h)">
+                    <span>🦴</span>
+                    <span>Esqueleto</span>
+                    <span class="btn-control__badge" id="skeletonBadge">OFF</span>
+                </button>
+            </div>
+
+        </section>
+
+        <!-- Sidebar: Effects Catalog -->
+        <aside class="sidebar">
+            <div class="panel">
+                <div class="panel__header">
+                    <span class="panel__title">Efectos Visuales</span>
+                    <span class="panel__count" id="effectCount">13</span>
+                </div>
+                <div class="effects-grid" id="effectsList">
+                    <!-- Tarjetas generadas dinámicamente -->
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <!-- Floating Toast Notification -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Script Principal -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
