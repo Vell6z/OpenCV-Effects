@@ -9,9 +9,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet">
     
-    <!-- MediaPipe Hands & Camera Utils vía CDN (Oficial Google) -->
+    <!-- MediaPipe Hands, Pose & Camera Utils vía CDN (Oficial Google) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -53,9 +54,9 @@
 
                 <!-- Placeholder -->
                 <div class="video-placeholder" id="videoPlaceholder">
-                    <div class="video-placeholder__icon">🤲</div>
+                    <div class="video-placeholder__icon">⚡</div>
                     <p class="video-placeholder__text">
-                        Enciende tu cámara y forma un visor con los dedos pulgar e índice o ambas manos.
+                        Enciende tu cámara para encuadrar con tus manos o encierra tu cuerpo en el visor cyberpunk.
                     </p>
                     <button class="video-placeholder__btn" id="startCameraBtn">
                         Iniciar Cámara
@@ -96,14 +97,21 @@
 
             <!-- Controls Toolbar 2 (Tracking) -->
             <div class="controls-bar">
+                <button class="btn-control active" id="targetBtn" title="Cambiar objetivo: Manos / Cuerpo (t)">
+                    <span id="targetIcon">🖐️</span>
+                    <span id="targetLabel">Manos</span>
+                </button>
+
+                <span class="controls-bar__separator"></span>
+
                 <button class="btn-control" id="modeBtn" title="Cambiar modo de encuadre (m)">
-                    <span>🖐️</span>
+                    <span id="modeIcon">🎯</span>
                     <span id="modeLabel">Visor de dedos</span>
                 </button>
 
                 <span class="controls-bar__separator"></span>
 
-                <button class="btn-control active" id="rotationBtn" title="Girar visor con el ángulo de los dedos (r)">
+                <button class="btn-control active" id="rotationBtn" title="Girar visor con la postura (r)">
                     <span>🔄</span>
                     <span>Rotación</span>
                     <span class="btn-control__badge" id="rotationBadge">ON</span>

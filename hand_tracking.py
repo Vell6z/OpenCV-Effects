@@ -278,3 +278,89 @@ def compute_box(mode, hands_px_list, w, h):
     elif mode == "zoom_centro":
         return box_from_center_zoom(hands_px_list, w, h)
     return box_from_two_hands(hands_px_list, w, h)
+
+
+# ----------------------------------------------------------------------------
+# TRACKING CORPORAL / PERSONA (MediaPipe Pose)
+# ----------------------------------------------------------------------------
+BODY_MODES = ["cuerpo_completo", "torso_cabeza", "retrato_busto"]
+BODY_MODE_LABELS = {
+    "cuerpo_completo": "Cuerpo completo",
+    "torso_cabeza": "Torso y cabeza",
+    "retrato_busto": "Busto / Retrato",
+}
+
+
+def box_from_pose(pose_landmarks_px, w, h, mode="cuerpo_completo"):
+    """Calcula un bounding box que encierra a la persona con margen superior para la cabeza."""
+    if len(pose_landmarks_px) == 0:
+        return None
+
+    max_idx = 32
+    if mode == "retrato_busto":
+        max_idx = 12
+    elif mode == "torso_cabeza":
+        max_idx = 24
+
+    pts = pose_landmarks_px[:max_idx + 1]
+    if len(pts) == 0:
+        return None
+
+    x1, y1 = pts[:, 0].min(), pts[:, 1].min()
+    x2, y2 = pts[:, 0].max(), pts[:, 1].max()
+
+    pad_side = 40
+    head_pad = 45
+    pad_bottom = 35 if mode == "cuerpo_completo" else 45
+
+    return clamp_box(x1 - pad_side, y1 - head_pad, x2 + pad_side, y2 + pad_bottom, w, h)
+
+
+def rotated_rect_from_pose(pose_landmarks_px, w, h, mode="cuerpo_completo"):
+    """Calcula un rectangulo rotado (cx, cy, rect_w, rect_h, angle) alineado
+    con los hombros de la persona, encerrando su cuerpo."""
+    if len(pose_landmarks_px) < 13:
+        return None
+
+    max_idx = 32
+    if mode == "retrato_busto":
+        max_idx = 12
+    elif mode == "torso_cabeza":
+        max_idx = 24
+
+    pts = pose_landmarks_px[:max_idx + 1]
+
+    # Hombros: 11 = izq, 12 = der
+    l_sh = pose_landmarks_px[11].astype(np.float32)
+    r_sh = pose_landmarks_px[12].astype(np.float32)
+    vec = r_sh - l_sh
+    angle = float(np.degrees(np.arctan2(vec[1], vec[0])))
+
+    if angle > 90:
+        angle -= 180
+    elif angle < -90:
+        angle += 180
+    angle = float(np.clip(angle, -45.0, 45.0))
+
+    cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+
+    theta = np.radians(angle)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    rel = pts.astype(np.float32) - np.array([cx, cy], dtype=np.float32)
+    local_x = rel[:, 0] * cos_t + rel[:, 1] * sin_t
+    local_y = -rel[:, 0] * sin_t + rel[:, 1] * cos_t
+
+    head_pad = 50.0
+    pad_side = 45.0
+    pad_bottom = 40.0
+
+    rect_w = float(local_x.max() - local_x.min()) + pad_side * 2
+    rect_h = float(local_y.max() - local_y.min()) + head_pad + pad_bottom
+    rect_w = max(MIN_BOX_SIZE, rect_w)
+    rect_h = max(MIN_BOX_SIZE, rect_h)
+
+    shift_y = (pad_bottom - head_pad) / 2.0
+    cx += float(-shift_y * sin_t)
+    cy += float(shift_y * cos_t)
+
+    return cx, cy, rect_w, rect_h, angle

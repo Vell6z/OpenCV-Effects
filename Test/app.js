@@ -9,10 +9,13 @@
 import { EFFECTS } from './effects.js';
 import {
     MODES, MODE_LABELS,
+    BODY_MODES, BODY_MODE_LABELS,
     SmoothBox, SmoothRotBox,
     landmarksToPx, computeBox,
     rotatedRectFromHands,
-    drawBrokenGlassBorder, drawHudBorder, drawHandSkeleton
+    boxFromPose, rotatedRectFromPose,
+    drawBrokenGlassBorder, drawHudBorder,
+    drawHandSkeleton, drawPoseSkeleton
 } from './hand_tracking.js';
 
 (function() {
@@ -37,7 +40,11 @@ import {
     const recOverlayBadge = document.getElementById('recOverlayBadge');
     const recOverlayTimer = document.getElementById('recOverlayTimer');
     const fpsBadge = document.getElementById('fpsBadge');
+    const targetBtn = document.getElementById('targetBtn');
+    const targetIcon = document.getElementById('targetIcon');
+    const targetLabel = document.getElementById('targetLabel');
     const modeBtn = document.getElementById('modeBtn');
+    const modeIcon = document.getElementById('modeIcon');
     const modeLabel = document.getElementById('modeLabel');
     const rotationBtn = document.getElementById('rotationBtn');
     const rotationBadge = document.getElementById('rotationBadge');
@@ -56,7 +63,9 @@ import {
     // ---- State ----
     let currentEffect = 'posterize';
     let intensity = 85;
+    let targetMode = 'hands'; // 'hands' | 'body'
     let modeIndex = 1; // 1 = 'encuadre_dedos'
+    let bodyModeIndex = 0; // 0 = 'cuerpo_completo'
     let allowRotation = true;
     let showSkeleton = false;
     let isStreaming = false;
@@ -64,10 +73,14 @@ import {
     let availableCameras = [];
     let currentDeviceId = null;
 
-    // Smoothers
+    // Smoothers (Manos y Cuerpo separados para transiciones fluidas)
     const boxSmoother = new SmoothBox(0.35);
     const rotSmoother = new SmoothRotBox(0.35);
+    const poseBoxSmoother = new SmoothBox(0.35);
+    const poseRotSmoother = new SmoothRotBox(0.35);
+
     let latestHandResults = null;
+    let latestPoseResults = null;
 
     // FPS Meter
     let frameCount = 0;
@@ -108,30 +121,53 @@ import {
         });
     }
 
-    // ---- MediaPipe Hands Setup ----
+    // ---- MediaPipe Setup (Hands & Pose) ----
     let hands = null;
+    let pose = null;
     function initMediaPipe() {
-        if (!window.Hands) {
-            console.error('MediaPipe Hands script not loaded yet.');
-            return;
+        if (window.Hands) {
+            hands = new window.Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 0, // 0 = Lite (Optimizado para 60 FPS en móviles)
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandResults);
+        } else {
+            console.warn('MediaPipe Hands script not loaded yet.');
         }
 
-        hands = new window.Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
+        if (window.Pose) {
+            pose = new window.Pose({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+            });
 
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 0, // 0 = Lite (Optimizado para 60 FPS en móviles)
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
+            pose.setOptions({
+                modelComplexity: 0, // 0 = Lite (Ultra rápido 60 FPS)
+                smoothLandmarks: true,
+                enableSegmentation: false,
+                smoothSegmentation: false,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
 
-        hands.onResults(onHandResults);
+            pose.onResults(onPoseResults);
+        } else {
+            console.warn('MediaPipe Pose script not loaded yet.');
+        }
     }
 
     function onHandResults(results) {
         latestHandResults = results;
+    }
+
+    function onPoseResults(results) {
+        latestPoseResults = results;
     }
 
     // ---- Camera Streaming ----
@@ -221,16 +257,21 @@ import {
             // 1. Dibujar el fotograma original de la cámara
             ctx.drawImage(sourceVideo, 0, 0, w, h);
 
-            // 2. Enviar a MediaPipe (alternado cada 2 frames para máxima fluidez)
+            // 2. Enviar a MediaPipe según el objetivo activo (alternado cada 2 frames para 60 FPS)
             frameCounter++;
-            if (hands && (frameCounter % 2 === 0)) {
-                await hands.send({ image: sourceVideo });
+            if (targetMode === 'hands') {
+                if (hands && (frameCounter % 2 === 0)) {
+                    await hands.send({ image: sourceVideo });
+                }
+                processHandFrame(w, h);
+            } else {
+                if (pose && (frameCounter % 2 === 0)) {
+                    await pose.send({ image: sourceVideo });
+                }
+                processBodyFrame(w, h);
             }
 
-            // 3. Procesar encuadre de manos
-            processHandFrame(w, h);
-
-            // 4. Medidor de FPS
+            // 3. Medidor de FPS
             calculateFPS();
 
             requestAnimationFrame(loop);
@@ -257,7 +298,7 @@ import {
                 if (rawBox) box = boxSmoother.update(rawBox);
             }
 
-            // Esqueleto debug
+            // Esqueleto debug de manos
             if (showSkeleton) {
                 drawHandSkeleton(ctx, latestHandResults.multiHandLandmarks, w, h);
             }
@@ -315,6 +356,86 @@ import {
             ctx.drawImage(patchCanvas, x1, y1);
 
             // Marco HUD
+            drawHudBorder(ctx, x1, y1, x2, y2);
+        }
+    }
+
+    function processBodyFrame(w, h) {
+        const mode = BODY_MODES[bodyModeIndex];
+        const useRotation = allowRotation;
+
+        let box = null;
+        let rotState = null;
+
+        if (latestPoseResults && latestPoseResults.poseLandmarks?.length) {
+            const lm = latestPoseResults.poseLandmarks;
+
+            if (useRotation) {
+                const rawRot = rotatedRectFromPose(lm, w, h, mode);
+                if (rawRot) rotState = poseRotSmoother.update(rawRot);
+            } else {
+                const rawBox = boxFromPose(lm, w, h, mode);
+                if (rawBox) box = poseBoxSmoother.update(rawBox);
+            }
+
+            // Esqueleto debug del cuerpo
+            if (showSkeleton) {
+                drawPoseSkeleton(ctx, lm, w, h);
+            }
+        } else {
+            rotState = poseRotSmoother.state;
+            box = poseBoxSmoother.box;
+        }
+
+        // ---- Renderizar Efecto Encerrando a la Persona ----
+        const effect = EFFECTS[currentEffect] || EFFECTS.posterize;
+
+        if (useRotation && rotState) {
+            const [cx, cy, rw, rh, angle] = rotState;
+            const irw = Math.max(20, Math.round(rw));
+            const irh = Math.max(20, Math.round(rh));
+
+            patchCanvas.width = irw;
+            patchCanvas.height = irh;
+
+            // Extraer y alinear el parche rotado centrado en la persona
+            patchCtx.save();
+            patchCtx.translate(irw / 2, irh / 2);
+            patchCtx.rotate(-angle * Math.PI / 180);
+            patchCtx.drawImage(outputCanvas, -cx, -cy);
+            patchCtx.restore();
+
+            // Aplicar efecto glitch en la región del cuerpo
+            effect.apply(patchCtx, irw, irh, intensity);
+
+            // Pegar de vuelta con rotación natural según la postura
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(angle * Math.PI / 180);
+            ctx.drawImage(patchCanvas, -irw / 2, -irh / 2);
+            ctx.restore();
+
+            // Borde fracturado cyberpunk encerrando a la persona
+            drawBrokenGlassBorder(ctx, cx, cy, irw, irh, angle);
+
+        } else if (box) {
+            const [x1, y1, x2, y2] = box;
+            const bw = Math.max(20, x2 - x1);
+            const bh = Math.max(20, y2 - y1);
+
+            patchCanvas.width = bw;
+            patchCanvas.height = bh;
+
+            // Copiar región del cuerpo de la persona
+            patchCtx.drawImage(outputCanvas, x1, y1, bw, bh, 0, 0, bw, bh);
+
+            // Aplicar efecto
+            effect.apply(patchCtx, bw, bh, intensity);
+
+            // Pegar de vuelta
+            ctx.drawImage(patchCanvas, x1, y1);
+
+            // Marco HUD delimitador
             drawHudBorder(ctx, x1, y1, x2, y2);
         }
     }
@@ -457,10 +578,40 @@ import {
         intensityValue.textContent = intensity;
     });
 
+    // Objetivo: Manos vs Cuerpo
+    function setTargetMode(newMode) {
+        targetMode = newMode;
+        if (targetMode === 'body') {
+            targetBtn.classList.add('active');
+            targetIcon.textContent = '🧍';
+            targetLabel.textContent = 'Cuerpo';
+            modeIcon.textContent = '👤';
+            modeLabel.textContent = BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]];
+            showToast('🧍 Objetivo: Detección de Persona / Cuerpo');
+        } else {
+            targetBtn.classList.add('active');
+            targetIcon.textContent = '🖐️';
+            targetLabel.textContent = 'Manos';
+            modeIcon.textContent = '🎯';
+            modeLabel.textContent = MODE_LABELS[MODES[modeIndex]];
+            showToast('🖐️ Objetivo: Detección de Manos');
+        }
+    }
+
+    targetBtn.addEventListener('click', () => {
+        setTargetMode(targetMode === 'hands' ? 'body' : 'hands');
+    });
+
     modeBtn.addEventListener('click', () => {
-        modeIndex = (modeIndex + 1) % MODES.length;
-        modeLabel.textContent = MODE_LABELS[MODES[modeIndex]];
-        showToast(`🖐️ Modo: ${MODE_LABELS[MODES[modeIndex]]}`);
+        if (targetMode === 'hands') {
+            modeIndex = (modeIndex + 1) % MODES.length;
+            modeLabel.textContent = MODE_LABELS[MODES[modeIndex]];
+            showToast(`🖐️ Encuadre: ${MODE_LABELS[MODES[modeIndex]]}`);
+        } else {
+            bodyModeIndex = (bodyModeIndex + 1) % BODY_MODES.length;
+            modeLabel.textContent = BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]];
+            showToast(`🧍 Encuadre: ${BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]]}`);
+        }
     });
 
     rotationBtn.addEventListener('click', () => {
@@ -500,7 +651,8 @@ import {
     // Keyboard Shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if (e.key === 's') captureBtn.click();
+        if (e.key === 't') targetBtn.click();
+        else if (e.key === 's') captureBtn.click();
         else if (e.key === 'v') recordBtn.click();
         else if (e.key === 'm') modeBtn.click();
         else if (e.key === 'r') rotationBtn.click();

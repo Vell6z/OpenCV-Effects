@@ -312,3 +312,198 @@ export function drawHandSkeleton(ctx, landmarksList, w, h) {
     }
     ctx.restore();
 }
+
+// ----------------------------------------------------------------------------
+// TRACKING CORPORAL / PERSONA (MediaPipe Pose)
+// ----------------------------------------------------------------------------
+export const BODY_MODES = ['cuerpo_completo', 'torso_cabeza', 'retrato_busto'];
+export const BODY_MODE_LABELS = {
+    cuerpo_completo: 'Cuerpo completo',
+    torso_cabeza: 'Torso y cabeza',
+    retrato_busto: 'Busto / Retrato'
+};
+
+function getPosePointsForMode(landmarks, w, h, mode) {
+    const pts = [];
+    let maxIdx = 32;
+    if (mode === 'retrato_busto') {
+        maxIdx = 12; // Cabeza y hombros
+    } else if (mode === 'torso_cabeza') {
+        maxIdx = 24; // Cabeza, brazos y caderas
+    }
+
+    for (let i = 0; i <= maxIdx && i < landmarks.length; i++) {
+        const lm = landmarks[i];
+        const vis = lm.visibility !== undefined ? lm.visibility : 1.0;
+        if (vis > 0.28) {
+            pts.push({
+                x: Math.round(lm.x * w),
+                y: Math.round(lm.y * h),
+                idx: i
+            });
+        }
+    }
+
+    if (pts.length < 3) {
+        for (let i = 0; i <= Math.min(12, landmarks.length - 1); i++) {
+            const lm = landmarks[i];
+            pts.push({
+                x: Math.round(lm.x * w),
+                y: Math.round(lm.y * h),
+                idx: i
+            });
+        }
+    }
+    return pts;
+}
+
+export function boxFromPose(landmarks, w, h, mode = 'cuerpo_completo') {
+    if (!landmarks || !landmarks.length) return null;
+    const pts = getPosePointsForMode(landmarks, w, h, mode);
+    if (!pts.length) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+    }
+
+    let headPad = 45;
+    if (landmarks[0] && landmarks[11] && landmarks[12]) {
+        const shoulderY = ((landmarks[11].y + landmarks[12].y) / 2) * h;
+        const noseY = landmarks[0].y * h;
+        const headH = Math.max(30, shoulderY - noseY);
+        headPad = Math.round(headH * 0.6);
+    }
+
+    const padSide = 40;
+    const padBottom = mode === 'cuerpo_completo' ? 35 : 45;
+
+    const x1 = minX - padSide;
+    const y1 = minY - headPad;
+    const x2 = maxX + padSide;
+    const y2 = maxY + padBottom;
+
+    return clampBox(x1, y1, x2, y2, w, h);
+}
+
+export function rotatedRectFromPose(landmarks, w, h, mode = 'cuerpo_completo') {
+    if (!landmarks || !landmarks.length) return null;
+    const pts = getPosePointsForMode(landmarks, w, h, mode);
+    if (pts.length < 3) return null;
+
+    let angle = 0;
+    const lSh = landmarks[11];
+    const rSh = landmarks[12];
+
+    if (lSh && rSh && (lSh.visibility === undefined || (lSh.visibility > 0.25 && rSh.visibility > 0.25))) {
+        const dx = (rSh.x - lSh.x) * w;
+        const dy = (rSh.y - lSh.y) * h;
+        angle = Math.atan2(dy, dx) * (180 / Math.PI);
+    } else if (landmarks[5] && landmarks[2]) {
+        const dx = (landmarks[5].x - landmarks[2].x) * w;
+        const dy = (landmarks[5].y - landmarks[2].y) * h;
+        angle = Math.atan2(dy, dx) * (180 / Math.PI);
+    }
+
+    if (angle > 90) angle -= 180;
+    else if (angle < -90) angle += 180;
+
+    angle = Math.max(-45, Math.min(45, angle));
+
+    let sumX = 0, sumY = 0;
+    for (const p of pts) {
+        sumX += p.x;
+        sumY += p.y;
+    }
+    let cx = sumX / pts.length;
+    let cy = sumY / pts.length;
+
+    const rad = angle * (Math.PI / 180);
+    const cosT = Math.cos(rad);
+    const sinT = Math.sin(rad);
+
+    let minLX = Infinity, maxLX = -Infinity;
+    let minLY = Infinity, maxLY = -Infinity;
+
+    for (const p of pts) {
+        const rx = p.x - cx;
+        const ry = p.y - cy;
+        const lx = rx * cosT + ry * sinT;
+        const ly = -rx * sinT + ry * cosT;
+        if (lx < minLX) minLX = lx;
+        if (lx > maxLX) maxLX = lx;
+        if (ly < minLY) minLY = ly;
+        if (ly > maxLY) maxLY = ly;
+    }
+
+    const headPad = 50;
+    const padSide = 45;
+    const padBottom = 40;
+
+    let rectW = Math.max(MIN_BOX_SIZE, (maxLX - minLX) + padSide * 2);
+    let rectH = Math.max(MIN_BOX_SIZE, (maxLY - minLY) + headPad + padBottom);
+
+    const shiftY = (padBottom - headPad) / 2;
+    cx += -shiftY * sinT;
+    cy += shiftY * cosT;
+
+    return [cx, cy, rectW, rectH, angle];
+}
+
+export function drawPoseSkeleton(ctx, landmarks, w, h) {
+    if (!landmarks || !landmarks.length) return;
+
+    const POSE_CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 7],
+        [0, 4], [4, 5], [5, 6], [6, 8],
+        [9, 10], [11, 12],
+        [11, 23], [12, 24], [23, 24],
+        [11, 13], [13, 15],
+        [12, 14], [14, 16],
+        [23, 25], [25, 27],
+        [24, 26], [26, 28]
+    ];
+
+    const pts = landmarks.map(lm => ({
+        x: lm.x * w,
+        y: lm.y * h,
+        vis: lm.visibility !== undefined ? lm.visibility : 1.0
+    }));
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 229, 255, 0.7)';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#00e5ff';
+    ctx.shadowBlur = 8;
+
+    ctx.beginPath();
+    for (const [i, j] of POSE_CONNECTIONS) {
+        if (i < pts.length && j < pts.length) {
+            const p1 = pts[i];
+            const p2 = pts[j];
+            if (p1.vis > 0.25 && p2.vis > 0.25) {
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+            }
+        }
+    }
+    ctx.stroke();
+
+    for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (p.vis > 0.25) {
+            const isJoint = (i === 11 || i === 12 || i === 23 || i === 24);
+            ctx.fillStyle = isJoint ? '#ff3366' : '#c83ce6';
+            ctx.shadowColor = isJoint ? '#ff3366' : '#c83ce6';
+            ctx.shadowBlur = 6;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, isJoint ? 5 : 3.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    ctx.restore();
+}
