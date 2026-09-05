@@ -58,12 +58,10 @@ def add_halftone_texture(patch, dot_spacing=6, strength=0.25):
 
 
 def glitch_posterize(patch, intensity):
-    """Estilo 'Visor Roto': posterizado duotone/cuatricromia con un leve
-    corte en bandas para que no se vea completamente estatico, mas
-    fiel al efecto de la referencia (colores duros + ligero temblor)."""
+    """Estilo 'Visor Roto': posterizado duotone/cuatricromia con
+    corte en bandas activo, textura de imprenta y temblor continuo."""
     result = posterize_duotone(patch)
-    # un toque de slice muy sutil, escalado por intensidad, para que la
-    # imagen posterizada respire/tiemble un poco en vez de verse congelada
     if intensity > 0:
-        result = glitch_slice(result, max(5, intensity * 0.25))
+        result = add_halftone_texture(result, dot_spacing=5, strength=0.18)
+        result = glitch_slice(result, max(8, int(intensity * 0.45)))
     return result

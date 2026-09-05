@@ -87,46 +87,128 @@ export const EFFECTS = {
 };
 
 // ============================================================================
-// 1. POSTERIZE (Duotone / Cuatricromía)
+// 1. POSTERIZE ("Visor Roto" Duotone / Cuatricromía Glitch Dinámico)
 // ============================================================================
+let posterizeFrameTick = 0;
+
 function applyPosterize(ctx, w, h, intensity) {
+    posterizeFrameTick++;
     const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
+    const numPixels = w * h;
 
-    // Paleta cuatricromía: Negro, Magenta, Cian, Amarillo
+    // 1. Calcular luminancia y ecualizar histograma para contraste de serigrafía puro
+    const grays = new Uint8Array(numPixels);
+    const hist = new Uint32Array(256);
+
+    for (let i = 0; i < numPixels; i++) {
+        const idx = i * 4;
+        const g = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        grays[i] = g;
+        hist[g]++;
+    }
+
+    // CDF para ecualización
+    const cdf = new Uint32Array(256);
+    cdf[0] = hist[0];
+    for (let i = 1; i < 256; i++) {
+        cdf[i] = cdf[i - 1] + hist[i];
+    }
+
+    let cdfMin = 0;
+    for (let i = 0; i < 256; i++) {
+        if (cdf[i] > 0) {
+            cdfMin = cdf[i];
+            break;
+        }
+    }
+
+    const lut = new Uint8Array(256);
+    const denom = numPixels - cdfMin || 1;
+    for (let i = 0; i < 256; i++) {
+        lut[i] = Math.round(((cdf[i] - cdfMin) / denom) * 255);
+    }
+
+    // 2. Paleta cuatricromía dura (Negro profundo, Magenta neón, Cian eléctrico, Amarillo puro)
     const palette = [
-        [20, 20, 20],       // Negro
-        [220, 30, 200],     // Magenta
-        [30, 200, 220],     // Cian
-        [240, 230, 30]      // Amarillo
+        [15, 12, 18],       // Negro / Sombra profunda
+        [230, 25, 190],     // Magenta eléctrico
+        [25, 215, 235],     // Cian neón
+        [248, 232, 25]      // Amarillo serigrafía
     ];
 
-    const step = 256 / palette.length;
+    for (let i = 0; i < numPixels; i++) {
+        const idx = i * 4;
+        const eq = lut[grays[i]];
+        const pIdx = Math.min(3, Math.floor(eq / 64));
+        const color = palette[pIdx];
 
-    for (let i = 0; i < data.length; i += 4) {
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        const idx = Math.min(palette.length - 1, Math.floor(gray / step));
-        const color = palette[idx];
-
-        data[i] = color[0];
-        data[i + 1] = color[1];
-        data[i + 2] = color[2];
+        data[idx] = color[0];
+        data[idx + 1] = color[1];
+        data[idx + 2] = color[2];
     }
 
     ctx.putImageData(imgData, 0, 0);
 
-    // Trama halftone sutil
+    // 3. Trama Halftone punteada semi-animada estilo imprenta
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-    const spacing = 6;
+    ctx.fillStyle = 'rgba(10, 10, 15, 0.22)';
+    const spacing = 5;
+    const phase = (posterizeFrameTick % 2) * 1;
     for (let y = 0; y < h; y += spacing) {
         for (let x = 0; x < w; x += spacing) {
-            if ((Math.floor(x / spacing) + Math.floor(y / spacing)) % 2 === 0) {
-                ctx.fillRect(x, y, spacing, spacing);
+            if ((Math.floor(x / spacing) + Math.floor(y / spacing) + phase) % 2 === 0) {
+                ctx.fillRect(x, y, 2.5, 2.5);
             }
         }
     }
     ctx.restore();
+
+    // 4. Glitch Slice Dinámico (Corte en bandas horizontales con temblor continuo)
+    if (intensity > 5) {
+        const nSlices = Math.max(4, Math.floor((intensity * 0.35) * 0.45));
+        const sliceH = Math.max(3, Math.floor(h / nSlices));
+        const maxShift = Math.max(3, Math.floor((intensity * 0.3) * 0.8));
+
+        // Buffer temporal para realizar el corte de bandas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = w;
+        tempCanvas.height = h;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(ctx.canvas, 0, 0);
+
+        for (let y = 0; y < h; y += sliceH) {
+            const bh = Math.min(sliceH, h - y);
+            // Salto aleatorio por banda
+            const shift = Math.round((Math.random() - 0.5) * 2 * maxShift);
+
+            if (Math.abs(shift) > 0) {
+                ctx.drawImage(tempCanvas, 0, y, w, bh, shift, y, w, bh);
+
+                // Envolver bordes para que no queden huecos negros
+                if (shift > 0) {
+                    ctx.drawImage(tempCanvas, w - shift, y, shift, bh, 0, y, shift, bh);
+                } else if (shift < 0) {
+                    ctx.drawImage(tempCanvas, 0, y, -shift, bh, w + shift, y, -shift, bh);
+                }
+            }
+        }
+
+        // 5. Micro-aberración cromática ocasional (descalce de plancha de color)
+        if (Math.random() < 0.65) {
+            const glitchY = Math.floor(Math.random() * (h - 20));
+            const glitchH = Math.floor(Math.random() * 15 + 6);
+            const rgbShift = Math.floor(Math.random() * 6 - 3);
+
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.fillStyle = 'rgba(255, 0, 128, 0.25)';
+            ctx.fillRect(rgbShift, glitchY, w, glitchH);
+            ctx.fillStyle = 'rgba(0, 230, 255, 0.25)';
+            ctx.fillRect(-rgbShift, glitchY, w, glitchH);
+            ctx.restore();
+        }
+    }
 }
 
 // ============================================================================
