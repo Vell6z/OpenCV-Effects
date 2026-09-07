@@ -183,8 +183,7 @@ current_intensity = DEFAULT_INTENSITY
 mode_idx = DEFAULT_MODE_INDEX
 show_skeleton = SHOW_HAND_SKELETON
 allow_rotation = ALLOW_ROTATION
-is_body_mode = False
-face_detect_enabled = False
+tracking_mode = "hands"  # 'hands' | 'body' | 'face'
 
 # Smoothers (persistentes entre frames para suavizar el cuadro)
 smoother = SmoothBox()
@@ -213,9 +212,9 @@ def encode_frame(frame, quality=60):
 
 
 def process_frame_with_hands(frame, effect_key, intensity):
-    """Procesa un frame: detecta manos o cuerpo (según is_body_mode), calcula el recuadro,
-    y aplica el efecto SOLO dentro del recuadro encerrando a la persona o las manos."""
-    global last_box, last_rot_state, smoother, rot_smoother, frame_infer_count, cached_results, is_body_mode
+    """Procesa un frame: detecta manos, cuerpo o rostro (según tracking_mode),
+    y aplica el efecto SOLO dentro del recuadro correspondiente."""
+    global last_box, last_rot_state, smoother, rot_smoother, frame_infer_count, cached_results, tracking_mode
 
     h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -249,7 +248,7 @@ def process_frame_with_hands(frame, effect_key, intensity):
     box = last_box
     rot_state = last_rot_state
 
-    if is_body_mode:
+    if tracking_mode == "body":
         # Detección del cuerpo entero con MediaPipe Pose
         if should_run_mp:
             results = pose_detector.process(rgb_mp)
@@ -275,6 +274,42 @@ def process_frame_with_hands(frame, effect_key, intensity):
                 if raw_box is not None:
                     box = smoother.update(raw_box)
                     last_box = box
+
+    elif tracking_mode == "face":
+        # Detección de rostro con MediaPipe Face Detection
+        face_results = face_detector.process(rgb)
+        if face_results and face_results.detections:
+            for detection in face_results.detections:
+                bbox = detection.location_data.relative_bounding_box
+                pad = 15
+                fx = max(0, int(bbox.xmin * w) - pad)
+                fy = max(0, int(bbox.ymin * h) - pad)
+                fw = int(bbox.width * w) + pad * 2
+                fh = int(bbox.height * h) + pad * 2
+                fx2 = min(w, fx + fw)
+                fy2 = min(h, fy + fh)
+
+                if fx2 - fx > 10 and fy2 - fy > 10:
+                    face_patch = source_frame[fy:fy2, fx:fx2].copy()
+                    try:
+                        face_glitched = process_func(face_patch, intensity)
+                        if face_glitched is None or face_glitched.shape != face_patch.shape:
+                            face_glitched = face_patch
+                    except Exception:
+                        face_glitched = face_patch
+
+                    display[fy:fy2, fx:fx2] = face_glitched
+
+                    cv2.rectangle(display, (fx, fy), (fx2, fy2), (0, 255, 255), 2)
+                    corner_len = 14
+                    face_corners = [
+                        (fx, fy, 1, 1), (fx2, fy, -1, 1),
+                        (fx, fy2, 1, -1), (fx2, fy2, -1, -1),
+                    ]
+                    for cx_f, cy_f, dx_f, dy_f in face_corners:
+                        cv2.line(display, (cx_f, cy_f), (cx_f + dx_f * corner_len, cy_f), (0, 255, 255), 3)
+                        cv2.line(display, (cx_f, cy_f), (cx_f, cy_f + dy_f * corner_len), (0, 255, 255), 3)
+
     else:
         # Detección de manos con MediaPipe Hands
         use_rotation = allow_rotation and mode == "encuadre_dedos"
@@ -304,97 +339,57 @@ def process_frame_with_hands(frame, effect_key, intensity):
                 box = smoother.update(raw_box)
                 last_box = box
 
-    # ---- Aplicar efecto en el recuadro ----
-    if use_rotation and rot_state is not None:
-        cx, cy, rw, rh, angle = rot_state
-        patch = get_rotated_patch(source_frame, cx, cy, rw, rh, angle)
-        if patch is not None:
-            try:
-                processed = process_func(patch, intensity)
-                if processed is None or processed.shape != patch.shape:
+    # ---- Aplicar efecto en el recuadro (solo para modos hands/body) ----
+    if tracking_mode != "face":
+        if use_rotation and rot_state is not None:
+            cx, cy, rw, rh, angle = rot_state
+            patch = get_rotated_patch(source_frame, cx, cy, rw, rh, angle)
+            if patch is not None:
+                try:
+                    processed = process_func(patch, intensity)
+                    if processed is None or processed.shape != patch.shape:
+                        processed = patch
+                except Exception:
                     processed = patch
-            except Exception:
-                processed = patch
 
-            display, rotated_mask = paste_rotated_patch(
-                display, processed, cx, cy, rw, rh, angle
-            )
-            display = draw_broken_glass_border(display, rotated_mask)
+                display, rotated_mask = paste_rotated_patch(
+                    display, processed, cx, cy, rw, rh, angle
+                )
+                display = draw_broken_glass_border(display, rotated_mask)
 
-    elif box is not None:
-        x1, y1, x2, y2 = box
-        x1c, y1c = max(0, x1), max(0, y1)
-        x2c, y2c = min(w, x2), min(h, y2)
+        elif box is not None:
+            x1, y1, x2, y2 = box
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(w, x2), min(h, y2)
 
-        if x2c > x1c and y2c > y1c:
-            patch = source_frame[y1c:y2c, x1c:x2c].copy()
-            try:
-                glitched = process_func(patch, intensity)
-                if glitched is None:
+            if x2c > x1c and y2c > y1c:
+                patch = source_frame[y1c:y2c, x1c:x2c].copy()
+                try:
+                    glitched = process_func(patch, intensity)
+                    if glitched is None:
+                        glitched = patch
+                except Exception:
                     glitched = patch
-            except Exception:
-                glitched = patch
 
-            if glitched.shape[:2] == (y2c - y1c, x2c - x1c):
-                display[y1c:y2c, x1c:x2c] = glitched
+                if glitched.shape[:2] == (y2c - y1c, x2c - x1c):
+                    display[y1c:y2c, x1c:x2c] = glitched
 
-            # Dibujar borde del cuadro
-            cv2.rectangle(display, (x1c, y1c), (x2c, y2c), (0, 255, 255), 2)
-            corner_len = 18
-            corners = [(x1c, y1c, 1, 1), (x2c, y1c, -1, 1),
-                       (x1c, y2c, 1, -1), (x2c, y2c, -1, -1)]
-            for cx, cy, dx, dy in corners:
-                cv2.line(display, (cx, cy), (cx + dx * corner_len, cy), (0, 255, 255), 3)
-                cv2.line(display, (cx, cy), (cx, cy + dy * corner_len), (0, 255, 255), 3)
-
-    # ---- Detección de rostros: aplicar efecto DENTRO del rostro ----
-    if face_detect_enabled:
-        face_results = face_detector.process(rgb)
-        if face_results and face_results.detections:
-            for detection in face_results.detections:
-                bbox = detection.location_data.relative_bounding_box
-                pad = 15
-                fx = max(0, int(bbox.xmin * w) - pad)
-                fy = max(0, int(bbox.ymin * h) - pad)
-                fw = int(bbox.width * w) + pad * 2
-                fh = int(bbox.height * h) + pad * 2
-                fx2 = min(w, fx + fw)
-                fy2 = min(h, fy + fh)
-
-                if fx2 - fx > 10 and fy2 - fy > 10:
-                    # Extraer región del rostro
-                    face_patch = source_frame[fy:fy2, fx:fx2].copy()
-
-                    # Aplicar efecto al parche del rostro
-                    try:
-                        face_glitched = process_func(face_patch, intensity)
-                        if face_glitched is None or face_glitched.shape != face_patch.shape:
-                            face_glitched = face_patch
-                    except Exception:
-                        face_glitched = face_patch
-
-                    # Pegar de vuelta
-                    display[fy:fy2, fx:fx2] = face_glitched
-
-                    # Dibujar borde HUD alrededor del rostro
-                    cv2.rectangle(display, (fx, fy), (fx2, fy2), (0, 255, 255), 2)
-                    corner_len = 14
-                    face_corners = [
-                        (fx, fy, 1, 1), (fx2, fy, -1, 1),
-                        (fx, fy2, 1, -1), (fx2, fy2, -1, -1),
-                    ]
-                    for cx_f, cy_f, dx_f, dy_f in face_corners:
-                        cv2.line(display, (cx_f, cy_f), (cx_f + dx_f * corner_len, cy_f), (0, 255, 255), 3)
-                        cv2.line(display, (cx_f, cy_f), (cx_f, cy_f + dy_f * corner_len), (0, 255, 255), 3)
+                # Dibujar borde del cuadro
+                cv2.rectangle(display, (x1c, y1c), (x2c, y2c), (0, 255, 255), 2)
+                corner_len = 18
+                corners = [(x1c, y1c, 1, 1), (x2c, y1c, -1, 1),
+                           (x1c, y2c, 1, -1), (x2c, y2c, -1, -1)]
+                for cx, cy, dx, dy in corners:
+                    cv2.line(display, (cx, cy), (cx + dx * corner_len, cy), (0, 255, 255), 3)
+                    cv2.line(display, (cx, cy), (cx, cy + dy * corner_len), (0, 255, 255), 3)
 
     # HUD
-    hud_label = "Modo: CUERPO COMPLETO" if is_body_mode else MODE_LABELS[MODES[mode_idx]]
+    TRACKING_LABELS = {"hands": MODE_LABELS[MODES[mode_idx]], "body": "CUERPO COMPLETO", "face": "ROSTRO"}
+    hud_label = f"Modo: {TRACKING_LABELS.get(tracking_mode, 'MANOS')}"
     hud_lines = [
-        hud_label + (" [rotando]" if use_rotation else ""),
+        hud_label + (" [rotando]" if (use_rotation and tracking_mode != 'face') else ""),
         f"Efecto: {effect_key}  (intensidad: {intensity})",
     ]
-    if face_detect_enabled:
-        hud_lines.append("Detección de Rostro: ON")
     y_off = 25
     for line in hud_lines:
         if not line:
@@ -419,13 +414,12 @@ def get_state_payload():
     return {
         "effect": current_effect,
         "intensity": current_intensity,
-        "is_body_mode": is_body_mode,
+        "tracking_mode": tracking_mode,
         "mode_idx": mode_idx,
-        "mode_label": "Cuerpo completo" if is_body_mode else MODE_LABELS[MODES[mode_idx]],
+        "mode_label": {"hands": MODE_LABELS[MODES[mode_idx]], "body": "Cuerpo completo", "face": "Detección de rostro"}.get(tracking_mode, MODE_LABELS[MODES[mode_idx]]),
         "modes": [{"key": m, "label": MODE_LABELS[m]} for m in MODES],
         "show_skeleton": show_skeleton,
         "allow_rotation": allow_rotation,
-        "face_detect_enabled": face_detect_enabled,
         "effects_list": {
             k: {"name": v["name"], "desc": v["desc"], "emoji": v["emoji"]}
             for k, v in EFFECTS.items()
@@ -502,8 +496,11 @@ def handle_change_mode(data=None):
 
 @socketio.on("toggle_body_mode")
 def handle_toggle_body_mode(data=None):
-    global is_body_mode, smoother, rot_smoother, last_box, last_rot_state, cached_results
-    is_body_mode = not is_body_mode
+    """Cicla entre modos: hands -> body -> face -> hands"""
+    global tracking_mode, smoother, rot_smoother, last_box, last_rot_state, cached_results
+    CYCLE = ["hands", "body", "face"]
+    idx = CYCLE.index(tracking_mode) if tracking_mode in CYCLE else 0
+    tracking_mode = CYCLE[(idx + 1) % len(CYCLE)]
     smoother = SmoothBox()
     rot_smoother = SmoothRotBox()
     last_box = None
@@ -524,13 +521,6 @@ def handle_toggle_rotation(data=None):
     global allow_rotation
     allow_rotation = not allow_rotation
     emit("state_update", get_state_payload())
-
-
-@socketio.on("toggle_face_detection")
-def handle_toggle_face_detection(data=None):
-    global face_detect_enabled
-    face_detect_enabled = not face_detect_enabled
-    emit("state_update", get_state_payload(), broadcast=True)
 
 
 def get_local_ip():

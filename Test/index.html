@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet">
     
-    <!-- MediaPipe Hands, Pose & Camera Utils vía CDN (Oficial Google) -->
+    <!-- MediaPipe Hands, Pose, Face Detection & Camera Utils vía CDN (Oficial Google) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
@@ -98,10 +98,10 @@
 
             <!-- Controls Toolbar 2 (Tracking) -->
             <div class="controls-bar">
-                <button class="btn-control" id="targetBtn" title="Activar / Desactivar detección de Cuerpo (t)">
-                    <span id="targetIcon">🧍</span>
-                    <span id="targetLabel">Modo Cuerpo</span>
-                    <span class="btn-control__badge" id="targetBadge">OFF</span>
+                <button class="btn-control active" id="targetBtn" title="Cambiar modo de tracking: Manos / Cuerpo / Rostro (t)">
+                    <span id="targetIcon">🖐️</span>
+                    <span id="targetLabel">Manos</span>
+                    <span class="btn-control__badge" id="targetBadge">MANOS</span>
                 </button>
 
                 <span class="controls-bar__separator"></span>
@@ -123,14 +123,6 @@
                     <span>🦴</span>
                     <span>Esqueleto</span>
                     <span class="btn-control__badge" id="skeletonBadge">OFF</span>
-                </button>
-
-                <span class="controls-bar__separator"></span>
-
-                <button class="btn-control" id="faceDetectBtn" title="Activar/desactivar detección de rostro (d)">
-                    <span>😀</span>
-                    <span>Rostro</span>
-                    <span class="btn-control__badge" id="faceDetectBadge">OFF</span>
                 </button>
             </div>
 

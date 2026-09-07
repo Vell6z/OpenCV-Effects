@@ -52,8 +52,6 @@ import {
     const rotationBadge = document.getElementById('rotationBadge');
     const skeletonBtn = document.getElementById('skeletonBtn');
     const skeletonBadge = document.getElementById('skeletonBadge');
-    const faceDetectBtn = document.getElementById('faceDetectBtn');
-    const faceDetectBadge = document.getElementById('faceDetectBadge');
     const effectsList = document.getElementById('effectsList');
     const effectCount = document.getElementById('effectCount');
     const toast = document.getElementById('toast');
@@ -67,12 +65,11 @@ import {
     // ---- State ----
     let currentEffect = 'posterize';
     let intensity = 85;
-    let targetMode = 'hands'; // 'hands' | 'body'
+    let targetMode = 'hands'; // 'hands' | 'body' | 'face'
     let modeIndex = 1; // 1 = 'encuadre_dedos'
     let bodyModeIndex = 0; // 0 = 'cuerpo_completo'
     let allowRotation = true;
     let showSkeleton = false;
-    let faceDetectEnabled = false;
     let isStreaming = false;
     let currentFacingMode = 'user';
     let availableCameras = [];
@@ -225,18 +222,34 @@ import {
 
             const constraints = {
                 video: {
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
+                    width: { ideal: 1280, max: 1920 },
+                    height: { ideal: 720, max: 1080 }
                 },
                 audio: false
             };
 
-            if (deviceId) constraints.video.deviceId = { exact: deviceId };
-            else if (facingMode) constraints.video.facingMode = facingMode;
-            else constraints.video.facingMode = currentFacingMode;
+            if (deviceId) {
+                constraints.video.deviceId = { exact: deviceId };
+            } else if (facingMode) {
+                constraints.video.facingMode = { ideal: facingMode };
+            } else {
+                constraints.video.facingMode = { ideal: currentFacingMode };
+            }
 
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (firstErr) {
+                // Fallback: cámaras traseras iPhone a veces rechazan constraints específicas
+                console.warn('First camera attempt failed, retrying with relaxed constraints:', firstErr);
+                const fallback = { video: { facingMode: facingMode || currentFacingMode }, audio: false };
+                if (deviceId) fallback.video = { deviceId: { exact: deviceId } };
+                stream = await navigator.mediaDevices.getUserMedia(fallback);
+            }
+
             sourceVideo.srcObject = stream;
+            // Forzar play explícito para iOS
+            await sourceVideo.play().catch(() => {});
 
             const activeTrack = stream.getVideoTracks()[0];
             if (activeTrack) {
@@ -277,71 +290,37 @@ import {
                 return;
             }
 
-            const w = outputCanvas.width;
-            const h = outputCanvas.height;
+            try {
+                const w = outputCanvas.width;
+                const h = outputCanvas.height;
 
-            // 1. Dibujar el fotograma original de la cámara
-            ctx.drawImage(sourceVideo, 0, 0, w, h);
+                // 1. Dibujar el fotograma original de la cámara
+                ctx.drawImage(sourceVideo, 0, 0, w, h);
 
-            // 2. Enviar a MediaPipe según el objetivo activo (alternado cada 2 frames para 60 FPS)
-            frameCounter++;
-            if (targetMode === 'hands') {
-                if (hands && (frameCounter % 2 === 0)) {
-                    await hands.send({ image: sourceVideo });
-                }
-                processHandFrame(w, h);
-            } else {
-                if (pose && (frameCounter % 2 === 0)) {
-                    await pose.send({ image: sourceVideo });
-                }
-                processBodyFrame(w, h);
-            }
-
-            // 3. Medidor de FPS
-            calculateFPS();
-
-            // 4. Detección de rostro: aplicar efecto DENTRO del rostro detectado
-            if (faceDetectEnabled) {
-                if (faceDetection && (frameCounter % 3 === 0)) {
-                    await faceDetection.send({ image: sourceVideo });
-                }
-                if (latestFaceResults && latestFaceResults.detections) {
-                    const effect = EFFECTS[currentEffect] || EFFECTS.posterize;
-
-                    for (const detection of latestFaceResults.detections) {
-                        const bbox = detection.boundingBox;
-                        if (!bbox) continue;
-
-                        // Calcular bounding box con margen extra
-                        const pad = 15;
-                        let fx = Math.round(bbox.xCenter * w - (bbox.width * w) / 2) - pad;
-                        let fy = Math.round(bbox.yCenter * h - (bbox.height * h) / 2) - pad;
-                        let fw = Math.round(bbox.width * w) + pad * 2;
-                        let fh = Math.round(bbox.height * h) + pad * 2;
-
-                        // Clampar a los límites del canvas
-                        fx = Math.max(0, fx);
-                        fy = Math.max(0, fy);
-                        fw = Math.min(w - fx, fw);
-                        fh = Math.min(h - fy, fh);
-
-                        if (fw > 10 && fh > 10) {
-                            // Extraer región del rostro
-                            patchCanvas.width = fw;
-                            patchCanvas.height = fh;
-                            patchCtx.drawImage(outputCanvas, fx, fy, fw, fh, 0, 0, fw, fh);
-
-                            // Aplicar efecto
-                            effect.apply(patchCtx, fw, fh, intensity);
-
-                            // Pegar de vuelta
-                            ctx.drawImage(patchCanvas, fx, fy);
-
-                            // Marco HUD estilo visor alrededor del rostro
-                            drawHudBorder(ctx, fx, fy, fx + fw, fy + fh);
-                        }
+                // 2. Enviar a MediaPipe según el objetivo activo
+                frameCounter++;
+                if (targetMode === 'hands') {
+                    if (hands && (frameCounter % 2 === 0)) {
+                        await hands.send({ image: sourceVideo });
                     }
+                    processHandFrame(w, h);
+                } else if (targetMode === 'body') {
+                    if (pose && (frameCounter % 2 === 0)) {
+                        await pose.send({ image: sourceVideo });
+                    }
+                    processBodyFrame(w, h);
+                } else if (targetMode === 'face') {
+                    if (faceDetection && (frameCounter % 2 === 0)) {
+                        await faceDetection.send({ image: sourceVideo });
+                    }
+                    processFaceFrame(w, h);
                 }
+
+                // 3. Medidor de FPS
+                calculateFPS();
+            } catch (err) {
+                // Evitar que cualquier error congele el render loop
+                console.warn('Render loop error (recovered):', err.message || err);
             }
 
             requestAnimationFrame(loop);
@@ -510,6 +489,51 @@ import {
         }
     }
 
+    function processFaceFrame(w, h) {
+        if (!latestFaceResults || !latestFaceResults.detections || !latestFaceResults.detections.length) return;
+
+        const effect = EFFECTS[currentEffect] || EFFECTS.posterize;
+
+        for (const detection of latestFaceResults.detections) {
+            try {
+                const bbox = detection.boundingBox;
+                if (!bbox) continue;
+
+                // Calcular bounding box con margen extra
+                const pad = 15;
+                let fx = Math.round(bbox.xCenter * w - (bbox.width * w) / 2) - pad;
+                let fy = Math.round(bbox.yCenter * h - (bbox.height * h) / 2) - pad;
+                let fw = Math.round(bbox.width * w) + pad * 2;
+                let fh = Math.round(bbox.height * h) + pad * 2;
+
+                // Clampar a los límites del canvas
+                fx = Math.max(0, fx);
+                fy = Math.max(0, fy);
+                fw = Math.min(w - fx, fw);
+                fh = Math.min(h - fy, fh);
+
+                if (fw > 10 && fh > 10) {
+                    // Extraer región del rostro
+                    patchCanvas.width = fw;
+                    patchCanvas.height = fh;
+                    patchCtx.drawImage(outputCanvas, fx, fy, fw, fh, 0, 0, fw, fh);
+
+                    // Aplicar efecto
+                    effect.apply(patchCtx, fw, fh, intensity);
+
+                    // Pegar de vuelta
+                    ctx.drawImage(patchCanvas, fx, fy);
+
+                    // Marco HUD estilo visor alrededor del rostro
+                    drawHudBorder(ctx, fx, fy, fx + fw, fy + fh);
+                }
+            } catch (e) {
+                // Ignorar errores individuales de detección (ej: rostro parcialmente fuera de cámara)
+                continue;
+            }
+        }
+    }
+
     function calculateFPS() {
         frameCount++;
         const now = performance.now();
@@ -648,30 +672,41 @@ import {
         intensityValue.textContent = intensity;
     });
 
-    // Objetivo: Manos vs Cuerpo
+    // Objetivo: Manos / Cuerpo / Rostro (3 modos)
+    const TARGET_CYCLE = ['hands', 'body', 'face'];
+
     function setTargetMode(newMode) {
         targetMode = newMode;
-        if (targetMode === 'body') {
-            targetBtn.classList.add('active');
-            targetIcon.textContent = '🧍';
-            targetLabel.textContent = 'Cuerpo: ON';
-            if (targetBadge) targetBadge.textContent = 'ON';
-            modeIcon.textContent = '👤';
-            modeLabel.textContent = BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]];
-            showToast('🧍 Modo Cuerpo ACTIVADO — encierra a la persona');
-        } else {
-            targetBtn.classList.remove('active');
+        targetBtn.classList.add('active');
+
+        if (targetMode === 'hands') {
             targetIcon.textContent = '🖐️';
-            targetLabel.textContent = 'Modo Cuerpo';
-            if (targetBadge) targetBadge.textContent = 'OFF';
+            targetLabel.textContent = 'Manos';
+            if (targetBadge) targetBadge.textContent = 'MANOS';
             modeIcon.textContent = '🎯';
             modeLabel.textContent = MODE_LABELS[MODES[modeIndex]];
-            showToast('🖐️ Modo Manos ACTIVADO — visor de dedos');
+            showToast('🖐️ Modo Manos — visor de dedos');
+        } else if (targetMode === 'body') {
+            targetIcon.textContent = '🧍';
+            targetLabel.textContent = 'Cuerpo';
+            if (targetBadge) targetBadge.textContent = 'CUERPO';
+            modeIcon.textContent = '👤';
+            modeLabel.textContent = BODY_MODE_LABELS[BODY_MODES[bodyModeIndex]];
+            showToast('🧍 Modo Cuerpo — encierra a la persona');
+        } else if (targetMode === 'face') {
+            targetIcon.textContent = '😀';
+            targetLabel.textContent = 'Rostro';
+            if (targetBadge) targetBadge.textContent = 'ROSTRO';
+            modeIcon.textContent = '😀';
+            modeLabel.textContent = 'Detección de rostro';
+            showToast('😀 Modo Rostro — efecto aplicado en la cara');
         }
     }
 
     targetBtn.addEventListener('click', () => {
-        setTargetMode(targetMode === 'hands' ? 'body' : 'hands');
+        const idx = TARGET_CYCLE.indexOf(targetMode);
+        const next = TARGET_CYCLE[(idx + 1) % TARGET_CYCLE.length];
+        setTargetMode(next);
     });
 
     modeBtn.addEventListener('click', () => {
@@ -698,13 +733,6 @@ import {
         skeletonBtn.classList.toggle('active', showSkeleton);
         skeletonBadge.textContent = showSkeleton ? 'ON' : 'OFF';
         showToast(`🦴 Esqueleto: ${showSkeleton ? 'ON' : 'OFF'}`);
-    });
-
-    faceDetectBtn.addEventListener('click', () => {
-        faceDetectEnabled = !faceDetectEnabled;
-        faceDetectBtn.classList.toggle('active', faceDetectEnabled);
-        faceDetectBadge.textContent = faceDetectEnabled ? 'ON' : 'OFF';
-        showToast(faceDetectEnabled ? '😀 Detección de rostro activada' : '😀 Detección de rostro desactivada');
     });
 
     flipCameraBtn.addEventListener('click', () => {
@@ -736,7 +764,6 @@ import {
         else if (e.key === 'm') modeBtn.click();
         else if (e.key === 'r') rotationBtn.click();
         else if (e.key === 'h') skeletonBtn.click();
-        else if (e.key === 'd') faceDetectBtn.click();
         else if (e.key === 'f') fullscreenBtn.click();
     });
 

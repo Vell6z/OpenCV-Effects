@@ -97,10 +97,10 @@
 
             <!-- Tracking Controls Bar -->
             <div class="controls-bar tracking-controls" id="trackingControls">
-                <button class="btn-control" id="bodyBtn" title="Activar / Desactivar detección de Cuerpo (t)">
-                    <span class="btn-control__icon" id="bodyIcon">🧍</span>
-                    <span class="btn-control__text" id="bodyBtnText">Modo Cuerpo</span>
-                    <span class="btn-control__badge" id="bodyBadge">OFF</span>
+                <button class="btn-control active" id="bodyBtn" title="Cambiar modo: Manos / Cuerpo / Rostro (t)">
+                    <span class="btn-control__icon" id="bodyIcon">🖐️</span>
+                    <span class="btn-control__text" id="bodyBtnText">Manos</span>
+                    <span class="btn-control__badge" id="bodyBadge">MANOS</span>
                 </button>
 
                 <span class="controls-bar__separator"></span>
@@ -122,14 +122,6 @@
                     <span class="btn-control__icon">🦴</span>
                     <span class="btn-control__text">Esqueleto</span>
                     <span class="btn-control__badge" id="skeletonBadge">OFF</span>
-                </button>
-
-                <span class="controls-bar__separator"></span>
-
-                <button class="btn-control" id="faceDetectBtn" title="Activar/desactivar detección de rostro (d)">
-                    <span class="btn-control__icon">😀</span>
-                    <span class="btn-control__text">Rostro</span>
-                    <span class="btn-control__badge" id="faceDetectBadge">OFF</span>
                 </button>
             </div>
 
@@ -269,10 +261,14 @@
                     intensitySlider.value = intensity;
                     intensityValue.textContent = intensity;
                 }
-                if (data.is_body_mode !== undefined) {
-                    bodyBadge.textContent = data.is_body_mode ? 'ON' : 'OFF';
-                    bodyBtn.classList.toggle('active', data.is_body_mode);
-                    bodyBtnText.textContent = data.is_body_mode ? 'Cuerpo: ON' : 'Modo Cuerpo';
+                if (data.tracking_mode !== undefined) {
+                    const ICONS = { hands: '🖐️', body: '🧍', face: '😀' };
+                    const LABELS = { hands: 'Manos', body: 'Cuerpo', face: 'Rostro' };
+                    const BADGES = { hands: 'MANOS', body: 'CUERPO', face: 'ROSTRO' };
+                    bodyIcon.textContent = ICONS[data.tracking_mode] || '🖐️';
+                    bodyBtnText.textContent = LABELS[data.tracking_mode] || 'Manos';
+                    bodyBadge.textContent = BADGES[data.tracking_mode] || 'MANOS';
+                    bodyBtn.classList.add('active');
                 }
                 if (data.mode_label) {
                     modeLabel.textContent = data.mode_label;
@@ -284,10 +280,6 @@
                 if (data.show_skeleton !== undefined) {
                     skeletonBadge.textContent = data.show_skeleton ? 'ON' : 'OFF';
                     skeletonBtn.classList.toggle('active', data.show_skeleton);
-                }
-                if (data.face_detect_enabled !== undefined) {
-                    faceDetectBadge.textContent = data.face_detect_enabled ? 'ON' : 'OFF';
-                    faceDetectBtn.classList.toggle('active', data.face_detect_enabled);
                 }
             });
 
@@ -535,8 +527,6 @@
         // ---- Tracking Controls ----
         bodyBtn.addEventListener('click', () => {
             socket.emit('toggle_body_mode');
-            const willBeOn = bodyBadge.textContent === 'OFF';
-            showToast(willBeOn ? '🧍 Activando detección de Cuerpo' : '🖐️ Activando detección de Manos');
         });
 
         modeBtn.addEventListener('click', () => {
@@ -550,12 +540,6 @@
 
         skeletonBtn.addEventListener('click', () => {
             socket.emit('toggle_skeleton');
-        });
-
-        faceDetectBtn.addEventListener('click', () => {
-            socket.emit('toggle_face_detection');
-            const willBeOn = faceDetectBadge.textContent === 'OFF';
-            showToast(willBeOn ? '😀 Detección de rostro activada' : '😀 Detección de rostro desactivada');
         });
 
         // ---- Frame Streaming ----
