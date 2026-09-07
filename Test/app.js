@@ -300,13 +300,47 @@ import {
             // 3. Medidor de FPS
             calculateFPS();
 
-            // 4. Detección de rostro (superpuesta sobre todo, si está activada)
+            // 4. Detección de rostro: aplicar efecto DENTRO del rostro detectado
             if (faceDetectEnabled) {
                 if (faceDetection && (frameCounter % 3 === 0)) {
                     await faceDetection.send({ image: sourceVideo });
                 }
                 if (latestFaceResults && latestFaceResults.detections) {
-                    drawFaceDetections(ctx, latestFaceResults.detections, w, h);
+                    const effect = EFFECTS[currentEffect] || EFFECTS.posterize;
+
+                    for (const detection of latestFaceResults.detections) {
+                        const bbox = detection.boundingBox;
+                        if (!bbox) continue;
+
+                        // Calcular bounding box con margen extra
+                        const pad = 15;
+                        let fx = Math.round(bbox.xCenter * w - (bbox.width * w) / 2) - pad;
+                        let fy = Math.round(bbox.yCenter * h - (bbox.height * h) / 2) - pad;
+                        let fw = Math.round(bbox.width * w) + pad * 2;
+                        let fh = Math.round(bbox.height * h) + pad * 2;
+
+                        // Clampar a los límites del canvas
+                        fx = Math.max(0, fx);
+                        fy = Math.max(0, fy);
+                        fw = Math.min(w - fx, fw);
+                        fh = Math.min(h - fy, fh);
+
+                        if (fw > 10 && fh > 10) {
+                            // Extraer región del rostro
+                            patchCanvas.width = fw;
+                            patchCanvas.height = fh;
+                            patchCtx.drawImage(outputCanvas, fx, fy, fw, fh, 0, 0, fw, fh);
+
+                            // Aplicar efecto
+                            effect.apply(patchCtx, fw, fh, intensity);
+
+                            // Pegar de vuelta
+                            ctx.drawImage(patchCanvas, fx, fy);
+
+                            // Marco HUD estilo visor alrededor del rostro
+                            drawHudBorder(ctx, fx, fy, fx + fw, fy + fh);
+                        }
+                    }
                 }
             }
 

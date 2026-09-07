@@ -347,44 +347,45 @@ def process_frame_with_hands(frame, effect_key, intensity):
                 cv2.line(display, (cx, cy), (cx + dx * corner_len, cy), (0, 255, 255), 3)
                 cv2.line(display, (cx, cy), (cx, cy + dy * corner_len), (0, 255, 255), 3)
 
-    # ---- Detección de rostros (si está activada) ----
+    # ---- Detección de rostros: aplicar efecto DENTRO del rostro ----
     if face_detect_enabled:
         face_results = face_detector.process(rgb)
         if face_results and face_results.detections:
             for detection in face_results.detections:
                 bbox = detection.location_data.relative_bounding_box
-                fx = int(bbox.xmin * w)
-                fy = int(bbox.ymin * h)
-                fw = int(bbox.width * w)
-                fh = int(bbox.height * h)
-                fx = max(0, fx)
-                fy = max(0, fy)
+                pad = 15
+                fx = max(0, int(bbox.xmin * w) - pad)
+                fy = max(0, int(bbox.ymin * h) - pad)
+                fw = int(bbox.width * w) + pad * 2
+                fh = int(bbox.height * h) + pad * 2
+                fx2 = min(w, fx + fw)
+                fy2 = min(h, fy + fh)
 
-                # Dibujar rectángulo de detección de rostro
-                cv2.rectangle(display, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+                if fx2 - fx > 10 and fy2 - fy > 10:
+                    # Extraer región del rostro
+                    face_patch = source_frame[fy:fy2, fx:fx2].copy()
 
-                # Esquinas decorativas
-                cl = 14
-                face_corners = [
-                    (fx, fy, 1, 1), (fx + fw, fy, -1, 1),
-                    (fx, fy + fh, 1, -1), (fx + fw, fy + fh, -1, -1),
-                ]
-                for cx_f, cy_f, dx_f, dy_f in face_corners:
-                    cv2.line(display, (cx_f, cy_f), (cx_f + dx_f * cl, cy_f), (0, 255, 0), 3)
-                    cv2.line(display, (cx_f, cy_f), (cx_f, cy_f + dy_f * cl), (0, 255, 0), 3)
+                    # Aplicar efecto al parche del rostro
+                    try:
+                        face_glitched = process_func(face_patch, intensity)
+                        if face_glitched is None or face_glitched.shape != face_patch.shape:
+                            face_glitched = face_patch
+                    except Exception:
+                        face_glitched = face_patch
 
-                # Confianza
-                conf = detection.score[0] if detection.score else 0
-                label = f"Rostro {conf:.0%}"
-                cv2.putText(display, label, (fx, fy - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(display, label, (fx, fy - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                    # Pegar de vuelta
+                    display[fy:fy2, fx:fx2] = face_glitched
 
-                # Keypoints (ojos, nariz, boca, orejas)
-                for kp in detection.location_data.relative_keypoints:
-                    kx, ky = int(kp.x * w), int(kp.y * h)
-                    cv2.circle(display, (kx, ky), 3, (54, 214, 231), -1)
+                    # Dibujar borde HUD alrededor del rostro
+                    cv2.rectangle(display, (fx, fy), (fx2, fy2), (0, 255, 255), 2)
+                    corner_len = 14
+                    face_corners = [
+                        (fx, fy, 1, 1), (fx2, fy, -1, 1),
+                        (fx, fy2, 1, -1), (fx2, fy2, -1, -1),
+                    ]
+                    for cx_f, cy_f, dx_f, dy_f in face_corners:
+                        cv2.line(display, (cx_f, cy_f), (cx_f + dx_f * corner_len, cy_f), (0, 255, 255), 3)
+                        cv2.line(display, (cx_f, cy_f), (cx_f, cy_f + dy_f * corner_len), (0, 255, 255), 3)
 
     # HUD
     hud_label = "Modo: CUERPO COMPLETO" if is_body_mode else MODE_LABELS[MODES[mode_idx]]
