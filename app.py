@@ -54,9 +54,10 @@ app.config["SECRET_KEY"] = "visor-roto-secret"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10 * 1024 * 1024)
 
-# ---- MediaPipe Hands & Pose (se inicializa una vez) ----
+# ---- MediaPipe Hands & Pose & Face (se inicializa una vez) ----
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
+mp_face_detection = mp.solutions.face_detection
 mp_draw = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
 mp_selfie = mp.solutions.selfie_segmentation
@@ -75,6 +76,11 @@ pose_detector = mp_pose.Pose(
 )
 
 selfie_segmentor = mp_selfie.SelfieSegmentation(model_selection=1)
+
+face_detector = mp_face_detection.FaceDetection(
+    model_selection=0,
+    min_detection_confidence=0.5,
+)
 
 # ---- Registro de efectos ----
 EFFECTS = {
@@ -178,6 +184,7 @@ mode_idx = DEFAULT_MODE_INDEX
 show_skeleton = SHOW_HAND_SKELETON
 allow_rotation = ALLOW_ROTATION
 is_body_mode = False
+face_detect_enabled = False
 
 # Smoothers (persistentes entre frames para suavizar el cuadro)
 smoother = SmoothBox()
@@ -340,12 +347,53 @@ def process_frame_with_hands(frame, effect_key, intensity):
                 cv2.line(display, (cx, cy), (cx + dx * corner_len, cy), (0, 255, 255), 3)
                 cv2.line(display, (cx, cy), (cx, cy + dy * corner_len), (0, 255, 255), 3)
 
+    # ---- Detección de rostros (si está activada) ----
+    if face_detect_enabled:
+        face_results = face_detector.process(rgb)
+        if face_results and face_results.detections:
+            for detection in face_results.detections:
+                bbox = detection.location_data.relative_bounding_box
+                fx = int(bbox.xmin * w)
+                fy = int(bbox.ymin * h)
+                fw = int(bbox.width * w)
+                fh = int(bbox.height * h)
+                fx = max(0, fx)
+                fy = max(0, fy)
+
+                # Dibujar rectángulo de detección de rostro
+                cv2.rectangle(display, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+
+                # Esquinas decorativas
+                cl = 14
+                face_corners = [
+                    (fx, fy, 1, 1), (fx + fw, fy, -1, 1),
+                    (fx, fy + fh, 1, -1), (fx + fw, fy + fh, -1, -1),
+                ]
+                for cx_f, cy_f, dx_f, dy_f in face_corners:
+                    cv2.line(display, (cx_f, cy_f), (cx_f + dx_f * cl, cy_f), (0, 255, 0), 3)
+                    cv2.line(display, (cx_f, cy_f), (cx_f, cy_f + dy_f * cl), (0, 255, 0), 3)
+
+                # Confianza
+                conf = detection.score[0] if detection.score else 0
+                label = f"Rostro {conf:.0%}"
+                cv2.putText(display, label, (fx, fy - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(display, label, (fx, fy - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
+                # Keypoints (ojos, nariz, boca, orejas)
+                for kp in detection.location_data.relative_keypoints:
+                    kx, ky = int(kp.x * w), int(kp.y * h)
+                    cv2.circle(display, (kx, ky), 3, (54, 214, 231), -1)
+
     # HUD
     hud_label = "Modo: CUERPO COMPLETO" if is_body_mode else MODE_LABELS[MODES[mode_idx]]
     hud_lines = [
         hud_label + (" [rotando]" if use_rotation else ""),
         f"Efecto: {effect_key}  (intensidad: {intensity})",
     ]
+    if face_detect_enabled:
+        hud_lines.append("Detección de Rostro: ON")
     y_off = 25
     for line in hud_lines:
         if not line:
@@ -376,6 +424,7 @@ def get_state_payload():
         "modes": [{"key": m, "label": MODE_LABELS[m]} for m in MODES],
         "show_skeleton": show_skeleton,
         "allow_rotation": allow_rotation,
+        "face_detect_enabled": face_detect_enabled,
         "effects_list": {
             k: {"name": v["name"], "desc": v["desc"], "emoji": v["emoji"]}
             for k, v in EFFECTS.items()
@@ -474,6 +523,13 @@ def handle_toggle_rotation(data=None):
     global allow_rotation
     allow_rotation = not allow_rotation
     emit("state_update", get_state_payload())
+
+
+@socketio.on("toggle_face_detection")
+def handle_toggle_face_detection(data=None):
+    global face_detect_enabled
+    face_detect_enabled = not face_detect_enabled
+    emit("state_update", get_state_payload(), broadcast=True)
 
 
 def get_local_ip():

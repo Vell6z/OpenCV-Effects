@@ -123,6 +123,14 @@
                     <span class="btn-control__text">Esqueleto</span>
                     <span class="btn-control__badge" id="skeletonBadge">OFF</span>
                 </button>
+
+                <span class="controls-bar__separator"></span>
+
+                <button class="btn-control" id="faceDetectBtn" title="Activar/desactivar detección de rostro (d)">
+                    <span class="btn-control__icon">😀</span>
+                    <span class="btn-control__text">Rostro</span>
+                    <span class="btn-control__badge" id="faceDetectBadge">OFF</span>
+                </button>
             </div>
 
             <!-- Current Effect Display -->
@@ -193,6 +201,8 @@
         const rotationBadge = document.getElementById('rotationBadge');
         const skeletonBtn = document.getElementById('skeletonBtn');
         const skeletonBadge = document.getElementById('skeletonBadge');
+        const faceDetectBtn = document.getElementById('faceDetectBtn');
+        const faceDetectBadge = document.getElementById('faceDetectBadge');
 
         const outCtx = outputCanvas.getContext('2d');
         const hidCtx = hiddenCanvas.getContext('2d');
@@ -274,6 +284,10 @@
                 if (data.show_skeleton !== undefined) {
                     skeletonBadge.textContent = data.show_skeleton ? 'ON' : 'OFF';
                     skeletonBtn.classList.toggle('active', data.show_skeleton);
+                }
+                if (data.face_detect_enabled !== undefined) {
+                    faceDetectBadge.textContent = data.face_detect_enabled ? 'ON' : 'OFF';
+                    faceDetectBtn.classList.toggle('active', data.face_detect_enabled);
                 }
             });
 
@@ -536,6 +550,12 @@
 
         skeletonBtn.addEventListener('click', () => {
             socket.emit('toggle_skeleton');
+        });
+
+        faceDetectBtn.addEventListener('click', () => {
+            socket.emit('toggle_face_detection');
+            const willBeOn = faceDetectBadge.textContent === 'OFF';
+            showToast(willBeOn ? '😀 Detección de rostro activada' : '😀 Detección de rostro desactivada');
         });
 
         // ---- Frame Streaming ----
@@ -802,6 +822,8 @@
                 rotationBtn.click();
             } else if (e.key === 'h') {
                 skeletonBtn.click();
+            } else if (e.key === 'd') {
+                faceDetectBtn.click();
             }
         });
 
