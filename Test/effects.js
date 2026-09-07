@@ -95,6 +95,12 @@ export const EFFECTS = {
         desc: "Cinta VHS 80s, tracking noise, scanlines CRT y OSD",
         emoji: "📼",
         apply: applyRetroVhs
+    },
+    digital_avatar: {
+        name: "Digital Avatar",
+        desc: "Holograma LiDAR 3D, filamentos de luz azul y silueta cuántica",
+        emoji: "🌐",
+        apply: applyDigitalAvatar
     }
 };
 
@@ -847,6 +853,106 @@ function applyRetroVhs(ctx, w, h, intensity) {
     const chWidth = ctx.measureText(chText).width;
     ctx.fillStyle = '#55ff77';
     ctx.fillText(chText, w - chWidth - 18, h - fontSize * 1.5 - 18);
+
+    ctx.restore();
+}
+
+// ============================================================================
+// 16. DIGITAL AVATAR (Holograma LiDAR 3D, Filamentos Azules & Fondo Negro)
+// ============================================================================
+let avatarTick = 0;
+
+function applyDigitalAvatar(ctx, w, h, intensity) {
+    avatarTick++;
+    const norm = Math.max(0.1, intensity / 100);
+
+    // 1. Obtener imagen actual de la cámara
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+
+    // 2. Fondo negro puro absoluto (#000000)
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+
+    // 3. Resolución adaptable para garantizar 60 FPS
+    const stepX = w > 900 ? 3 : 2;
+    const stepY = 2;
+    const depthScale = Math.floor(10 * norm); // Relieve tridimensional según brillo
+    const lumThreshold = Math.max(25, 45 - norm * 20); // Umbral de aislamiento de la silueta
+
+    ctx.save();
+    ctx.lineWidth = stepX <= 2 ? 1.2 : 1.7;
+
+    // 4. Dibujar filamentos verticales continuos de luz azul holográfica
+    for (let x = 0; x < w; x += stepX) {
+        for (let y = 0; y < h; y += stepY) {
+            const idx = (y * w + x) * 4;
+            const r = d[idx];
+            const g = d[idx + 1];
+            const b = d[idx + 2];
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+            if (lum > lumThreshold) {
+                // Desplazamiento topográfico 3D (las zonas con más luz se extruyen hacia el observador)
+                const dispY = y - Math.floor((lum / 255) * depthScale);
+                const factor = lum / 255;
+
+                let cr, cg, cb, ca;
+                if (factor > 0.72) {
+                    // Reflejos especulares y luces altas: Blanco hielo / Perla
+                    cr = Math.floor(190 + factor * 65);
+                    cg = Math.floor(220 + factor * 35);
+                    cb = 255;
+                    ca = 0.95;
+                } else if (factor > 0.38) {
+                    // Cuerpo, rostro y manos: Azul eléctrico vibrante
+                    cr = Math.floor(65 + factor * 110);
+                    cg = Math.floor(115 + factor * 105);
+                    cb = 255;
+                    ca = 0.85;
+                } else {
+                    // Penumbra / bordes lejanos: Azul cobalto profundo
+                    cr = Math.floor(25 + factor * 50);
+                    cg = Math.floor(45 + factor * 80);
+                    cb = Math.floor(170 + factor * 70);
+                    ca = 0.65;
+                }
+
+                ctx.strokeStyle = `rgba(${cr}, ${cg}, ${cb}, ${ca})`;
+                ctx.beginPath();
+                ctx.moveTo(x, dispY);
+                ctx.lineTo(x, dispY + stepY + 1);
+                ctx.stroke();
+
+                // Partículas cuánticas de escaneo flotando alrededor de los bordes del avatar
+                if (Math.random() < 0.009 * norm) {
+                    const sparkX = x + (Math.random() - 0.5) * 10;
+                    const sparkY = dispY + (Math.random() - 0.5) * 10;
+                    ctx.fillStyle = 'rgba(190, 235, 255, 0.75)';
+                    ctx.fillRect(sparkX, sparkY, 1.5, 1.5);
+                }
+            }
+        }
+    }
+
+    // 5. Resplandor (Glow) etéreo holográfico
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(60, 140, 255, 0.14)';
+    ctx.lineWidth = 3.5;
+
+    for (let x = 0; x < w; x += stepX * 2) {
+        for (let y = 0; y < h; y += stepY * 3) {
+            const idx = (y * w + x) * 4;
+            const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+            if (lum > lumThreshold + 30) {
+                const dispY = y - Math.floor((lum / 255) * depthScale);
+                ctx.beginPath();
+                ctx.moveTo(x, dispY);
+                ctx.lineTo(x, dispY + stepY * 2);
+                ctx.stroke();
+            }
+        }
+    }
 
     ctx.restore();
 }
