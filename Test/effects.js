@@ -864,9 +864,9 @@ let avatarTick = 0;
 
 function applyDigitalAvatar(ctx, w, h, intensity) {
     avatarTick++;
-    const norm = Math.max(0.1, intensity / 100);
+    const norm = Math.max(0.2, intensity / 100);
 
-    // 1. Obtener imagen actual de la cámara
+    // 1. Capturar fotograma original
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
@@ -874,83 +874,101 @@ function applyDigitalAvatar(ctx, w, h, intensity) {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
 
-    // 3. Resolución adaptable para garantizar 60 FPS
-    const stepX = w > 900 ? 3 : 2;
+    // 3. Parámetros de relieve LiDAR
+    const stepX = w > 800 ? 2.5 : 2; // Densidad de filamentos verticales
     const stepY = 2;
-    const depthScale = Math.floor(10 * norm); // Relieve tridimensional según brillo
-    const lumThreshold = Math.max(25, 45 - norm * 20); // Umbral de aislamiento de la silueta
+    const maxDepth = Math.floor(28 + norm * 26); // Extrusión 3D profunda para curvas de nivel en pelo y cara
+    const threshold = Math.max(22, 42 - norm * 18); // Corte nítido de silueta humana
+
+    // Matriz de luminancia contrastada para 60 FPS
+    function getContrastLum(px, py) {
+        if (px < 0 || px >= w || py < 0 || py >= h) return 0;
+        const i = (py * w + px) * 4;
+        const raw = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (raw <= threshold) return 0;
+        const normVal = (raw - threshold) / (255 - threshold);
+        return Math.pow(normVal, 1.25) * 255;
+    }
 
     ctx.save();
-    ctx.lineWidth = stepX <= 2 ? 1.2 : 1.7;
 
-    // 4. Dibujar filamentos verticales continuos de luz azul holográfica
+    // 4. Paso 1: Resplandor holográfico base (Glow azul periwinkle)
+    ctx.shadowColor = 'rgba(90, 150, 255, 0.75)';
+    ctx.shadowBlur = 5;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#7ca6ff'; // Azul periwinkle idéntico a la imagen
+
     for (let x = 0; x < w; x += stepX) {
+        const rx = Math.floor(x);
+        let isDrawing = false;
+
+        ctx.beginPath();
         for (let y = 0; y < h; y += stepY) {
-            const idx = (y * w + x) * 4;
-            const r = d[idx];
-            const g = d[idx + 1];
-            const b = d[idx + 2];
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            const lum = getContrastLum(rx, y);
 
-            if (lum > lumThreshold) {
-                // Desplazamiento topográfico 3D (las zonas con más luz se extruyen hacia el observador)
-                const dispY = y - Math.floor((lum / 255) * depthScale);
-                const factor = lum / 255;
+            if (lum > 0) {
+                // Desplazamiento topográfico 3D continuo (altura según luz y relieve)
+                const dispY = y - (lum / 255) * maxDepth;
 
-                let cr, cg, cb, ca;
-                if (factor > 0.72) {
-                    // Reflejos especulares y luces altas: Blanco hielo / Perla
-                    cr = Math.floor(190 + factor * 65);
-                    cg = Math.floor(220 + factor * 35);
-                    cb = 255;
-                    ca = 0.95;
-                } else if (factor > 0.38) {
-                    // Cuerpo, rostro y manos: Azul eléctrico vibrante
-                    cr = Math.floor(65 + factor * 110);
-                    cg = Math.floor(115 + factor * 105);
-                    cb = 255;
-                    ca = 0.85;
+                if (!isDrawing) {
+                    ctx.moveTo(rx, dispY);
+                    isDrawing = true;
                 } else {
-                    // Penumbra / bordes lejanos: Azul cobalto profundo
-                    cr = Math.floor(25 + factor * 50);
-                    cg = Math.floor(45 + factor * 80);
-                    cb = Math.floor(170 + factor * 70);
-                    ca = 0.65;
+                    ctx.lineTo(rx, dispY);
                 }
-
-                ctx.strokeStyle = `rgba(${cr}, ${cg}, ${cb}, ${ca})`;
-                ctx.beginPath();
-                ctx.moveTo(x, dispY);
-                ctx.lineTo(x, dispY + stepY + 1);
-                ctx.stroke();
-
-                // Partículas cuánticas de escaneo flotando alrededor de los bordes del avatar
-                if (Math.random() < 0.009 * norm) {
-                    const sparkX = x + (Math.random() - 0.5) * 10;
-                    const sparkY = dispY + (Math.random() - 0.5) * 10;
-                    ctx.fillStyle = 'rgba(190, 235, 255, 0.75)';
-                    ctx.fillRect(sparkX, sparkY, 1.5, 1.5);
+            } else {
+                if (isDrawing) {
+                    isDrawing = false;
                 }
             }
         }
+        ctx.stroke();
     }
 
-    // 5. Resplandor (Glow) etéreo holográfico
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.strokeStyle = 'rgba(60, 140, 255, 0.14)';
-    ctx.lineWidth = 3.5;
+    // 5. Paso 2: Altas luces y núcleo blanco-celeste en el pecho, cara y manos
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = 'rgba(230, 242, 255, 0.9)'; // Núcleo blanco brillante
 
-    for (let x = 0; x < w; x += stepX * 2) {
-        for (let y = 0; y < h; y += stepY * 3) {
-            const idx = (y * w + x) * 4;
-            const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
-            if (lum > lumThreshold + 30) {
-                const dispY = y - Math.floor((lum / 255) * depthScale);
-                ctx.beginPath();
-                ctx.moveTo(x, dispY);
-                ctx.lineTo(x, dispY + stepY * 2);
-                ctx.stroke();
+    for (let x = 0; x < w; x += stepX) {
+        const rx = Math.floor(x);
+        let isDrawing = false;
+
+        ctx.beginPath();
+        for (let y = 0; y < h; y += stepY) {
+            const lum = getContrastLum(rx, y);
+
+            // Solo en zonas de alta iluminación (pecho iluminado, rostro, dedos)
+            if (lum > 115) {
+                const dispY = y - (lum / 255) * maxDepth;
+
+                if (!isDrawing) {
+                    ctx.moveTo(rx, dispY);
+                    isDrawing = true;
+                } else {
+                    ctx.lineTo(rx, dispY);
+                }
+            } else {
+                if (isDrawing) {
+                    isDrawing = false;
+                }
             }
+        }
+        ctx.stroke();
+    }
+
+    // 6. Puntos de dispersión cuántica LiDAR en los bordes del pelo y manos (como en la foto)
+    ctx.fillStyle = 'rgba(180, 215, 255, 0.85)';
+    for (let i = 0; i < Math.floor(norm * 18); i++) {
+        const rx = Math.floor(Math.random() * w);
+        const ry = Math.floor(Math.random() * h);
+        const lum = getContrastLum(rx, ry);
+        if (lum > 20 && lum < 90) {
+            const dy = ry - (lum / 255) * maxDepth + (Math.random() - 0.5) * 6;
+            const dx = rx + (Math.random() - 0.5) * 8;
+            ctx.fillRect(dx, dy, 1.5, 1.5);
         }
     }
 
