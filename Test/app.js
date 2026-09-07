@@ -63,7 +63,7 @@ import {
     const patchCtx = patchCanvas.getContext('2d', { willReadFrequently: true });
 
     // ---- State ----
-    let currentEffect = 'posterize';
+    let currentEffect = 'data_mosaic';
     let intensity = 85;
     let targetMode = 'hands'; // 'hands' | 'body' | 'face'
     let modeIndex = 1; // 1 = 'encuadre_dedos'
@@ -84,6 +84,12 @@ import {
     let latestHandResults = null;
     let latestPoseResults = null;
     let latestFaceResults = null;
+
+    let handLostFrames = 0;
+    let bodyLostFrames = 0;
+    const MAX_LOST_FRAMES = 5; // Grace period: después de 5 frames sin detección, desaparece limpiamente
+    let isSendingFrame = false; // Control de concurrencia WASM para iOS Safari
+    let isCameraStarting = false; // Evita dobles toques al acceder a la cámara
 
     // FPS Meter
     let frameCount = 0;
@@ -214,16 +220,57 @@ import {
         }
     }
 
+    function waitForVideoReady(video) {
+        return new Promise((resolve) => {
+            if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
+                return resolve();
+            }
+            let resolved = false;
+            const done = () => {
+                if (!resolved) {
+                    resolved = true;
+                    video.removeEventListener('loadedmetadata', done);
+                    video.removeEventListener('canplay', done);
+                    video.removeEventListener('playing', done);
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+            };
+            video.addEventListener('loadedmetadata', done);
+            video.addEventListener('canplay', done);
+            video.addEventListener('playing', done);
+            const checkInterval = setInterval(() => {
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                    done();
+                }
+            }, 50);
+            setTimeout(done, 3500);
+        });
+    }
+
     async function startCamera(deviceId = null, facingMode = null) {
+        if (isCameraStarting) return;
+        isCameraStarting = true;
+
+        const prevBtnHtml = startCameraBtn.innerHTML;
+        startCameraBtn.disabled = true;
+        startCameraBtn.innerHTML = '<span>⏳</span> Iniciando cámara...';
+
         try {
             if (sourceVideo.srcObject) {
                 sourceVideo.srcObject.getTracks().forEach(t => t.stop());
             }
 
+            // Atributos obligatorios para reproducción inline continua en iOS Safari
+            sourceVideo.muted = true;
+            sourceVideo.playsInline = true;
+            sourceVideo.setAttribute('playsinline', '');
+            sourceVideo.setAttribute('webkit-playsinline', '');
+
             const constraints = {
                 video: {
-                    width: { ideal: 1280, max: 1920 },
-                    height: { ideal: 720, max: 1080 }
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
                 },
                 audio: false
             };
@@ -240,39 +287,51 @@ import {
             try {
                 stream = await navigator.mediaDevices.getUserMedia(constraints);
             } catch (firstErr) {
-                // Fallback: cámaras traseras iPhone a veces rechazan constraints específicas
                 console.warn('First camera attempt failed, retrying with relaxed constraints:', firstErr);
                 const fallback = { video: { facingMode: facingMode || currentFacingMode }, audio: false };
                 if (deviceId) fallback.video = { deviceId: { exact: deviceId } };
-                stream = await navigator.mediaDevices.getUserMedia(fallback);
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(fallback);
+                } catch (secondErr) {
+                    console.warn('Fallback failed, requesting basic video:', secondErr);
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                }
             }
 
             sourceVideo.srcObject = stream;
-            // Forzar play explícito para iOS
-            await sourceVideo.play().catch(() => {});
+
+            try {
+                await sourceVideo.play();
+            } catch (playErr) {
+                console.warn('Video play caught:', playErr);
+            }
+
+            await waitForVideoReady(sourceVideo);
 
             const activeTrack = stream.getVideoTracks()[0];
             if (activeTrack) {
                 const settings = activeTrack.getSettings();
                 currentDeviceId = settings.deviceId || deviceId;
-                currentFacingMode = settings.facingMode || facingMode || 'user';
+                currentFacingMode = settings.facingMode || facingMode || currentFacingMode;
             }
 
-            sourceVideo.onloadedmetadata = () => {
-                outputCanvas.width = sourceVideo.videoWidth || 640;
-                outputCanvas.height = sourceVideo.videoHeight || 480;
+            outputCanvas.width = sourceVideo.videoWidth || 640;
+            outputCanvas.height = sourceVideo.videoHeight || 480;
 
-                videoPlaceholder.classList.add('hidden');
-                statusDot.classList.add('active');
-                statusText.textContent = 'En vivo (60 FPS)';
-                isStreaming = true;
+            videoPlaceholder.classList.add('hidden');
+            statusDot.classList.add('active');
+            statusText.textContent = 'En vivo (60 FPS)';
+            isStreaming = true;
 
-                enumerateCameras();
-                startRenderLoop();
-            };
+            enumerateCameras();
+            startRenderLoop();
         } catch (err) {
             console.error('Camera error:', err);
             showToast('⚠️ No se pudo acceder a la cámara: ' + err.message);
+        } finally {
+            isCameraStarting = false;
+            startCameraBtn.disabled = false;
+            startCameraBtn.innerHTML = prevBtnHtml;
         }
     }
 
@@ -297,21 +356,32 @@ import {
                 // 1. Dibujar el fotograma original de la cámara
                 ctx.drawImage(sourceVideo, 0, 0, w, h);
 
-                // 2. Enviar a MediaPipe según el objetivo activo
+                // 2. Enviar a MediaPipe según el objetivo activo (evitando saturación en iOS)
                 frameCounter++;
+                const isVideoReady = sourceVideo.readyState >= 2 && sourceVideo.videoWidth > 0;
+
                 if (targetMode === 'hands') {
-                    if (hands && (frameCounter % 2 === 0)) {
-                        await hands.send({ image: sourceVideo });
+                    if (hands && !isSendingFrame && isVideoReady && (frameCounter % 2 === 0)) {
+                        isSendingFrame = true;
+                        hands.send({ image: sourceVideo })
+                            .catch(err => console.warn('Hands error:', err))
+                            .finally(() => { isSendingFrame = false; });
                     }
                     processHandFrame(w, h);
                 } else if (targetMode === 'body') {
-                    if (pose && (frameCounter % 2 === 0)) {
-                        await pose.send({ image: sourceVideo });
+                    if (pose && !isSendingFrame && isVideoReady && (frameCounter % 2 === 0)) {
+                        isSendingFrame = true;
+                        pose.send({ image: sourceVideo })
+                            .catch(err => console.warn('Pose error:', err))
+                            .finally(() => { isSendingFrame = false; });
                     }
                     processBodyFrame(w, h);
                 } else if (targetMode === 'face') {
-                    if (faceDetection && (frameCounter % 2 === 0)) {
-                        await faceDetection.send({ image: sourceVideo });
+                    if (faceDetection && !isSendingFrame && isVideoReady && (frameCounter % 2 === 0)) {
+                        isSendingFrame = true;
+                        faceDetection.send({ image: sourceVideo })
+                            .catch(err => console.warn('Face error:', err))
+                            .finally(() => { isSendingFrame = false; });
                     }
                     processFaceFrame(w, h);
                 }
@@ -319,7 +389,6 @@ import {
                 // 3. Medidor de FPS
                 calculateFPS();
             } catch (err) {
-                // Evitar que cualquier error congele el render loop
                 console.warn('Render loop error (recovered):', err.message || err);
             }
 
@@ -336,7 +405,10 @@ import {
         let box = null;
         let rotState = null;
 
-        if (latestHandResults && latestHandResults.multiHandLandmarks?.length) {
+        const hasHands = latestHandResults && latestHandResults.multiHandLandmarks && latestHandResults.multiHandLandmarks.length > 0;
+
+        if (hasHands) {
+            handLostFrames = 0;
             const handsPx = latestHandResults.multiHandLandmarks.map(lm => landmarksToPx(lm, w, h));
 
             if (useRotation) {
@@ -352,8 +424,17 @@ import {
                 drawHandSkeleton(ctx, latestHandResults.multiHandLandmarks, w, h);
             }
         } else {
-            rotState = rotSmoother.state;
-            box = boxSmoother.box;
+            handLostFrames++;
+            if (handLostFrames <= MAX_LOST_FRAMES) {
+                rotState = rotSmoother.state;
+                box = boxSmoother.box;
+            } else {
+                // Sin manos: resetear y no dibujar para evitar cuadro congelado
+                rotSmoother.reset();
+                boxSmoother.reset();
+                latestHandResults = null;
+                return;
+            }
         }
 
         // ---- Renderizar Efecto dentro del Visor ----
@@ -416,7 +497,10 @@ import {
         let box = null;
         let rotState = null;
 
-        if (latestPoseResults && latestPoseResults.poseLandmarks?.length) {
+        const hasBody = latestPoseResults && latestPoseResults.poseLandmarks && latestPoseResults.poseLandmarks.length > 0;
+
+        if (hasBody) {
+            bodyLostFrames = 0;
             const lm = latestPoseResults.poseLandmarks;
 
             if (useRotation) {
@@ -432,8 +516,16 @@ import {
                 drawPoseSkeleton(ctx, lm, w, h);
             }
         } else {
-            rotState = poseRotSmoother.state;
-            box = poseBoxSmoother.box;
+            bodyLostFrames++;
+            if (bodyLostFrames <= MAX_LOST_FRAMES) {
+                rotState = poseRotSmoother.state;
+                box = poseBoxSmoother.box;
+            } else {
+                poseRotSmoother.reset();
+                poseBoxSmoother.reset();
+                latestPoseResults = null;
+                return;
+            }
         }
 
         // ---- Renderizar Efecto Encerrando a la Persona ----
@@ -678,6 +770,17 @@ import {
     function setTargetMode(newMode) {
         targetMode = newMode;
         targetBtn.classList.add('active');
+
+        // Limpiar estados y suavizadores previos para una transición limpia sin residuos
+        boxSmoother.reset();
+        rotSmoother.reset();
+        poseBoxSmoother.reset();
+        poseRotSmoother.reset();
+        latestHandResults = null;
+        latestPoseResults = null;
+        latestFaceResults = null;
+        handLostFrames = MAX_LOST_FRAMES + 1;
+        bodyLostFrames = MAX_LOST_FRAMES + 1;
 
         if (targetMode === 'hands') {
             targetIcon.textContent = '🖐️';

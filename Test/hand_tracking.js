@@ -26,6 +26,10 @@ export class SmoothBox {
         this.box = null;
     }
 
+    reset() {
+        this.box = null;
+    }
+
     update(newBox) {
         if (!newBox) return this.box;
         if (!this.box) {
@@ -46,6 +50,10 @@ export class SmoothRotBox {
     constructor(alpha = SMOOTHING) {
         this.alpha = alpha;
         this.state = null; // [cx, cy, w, h, angle]
+    }
+
+    reset() {
+        this.state = null;
     }
 
     update(newState) {

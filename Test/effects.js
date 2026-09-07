@@ -83,6 +83,12 @@ export const EFFECTS = {
         desc: "Bloques de ruido estático",
         emoji: "📺",
         apply: applyNoiseBlock
+    },
+    data_mosaic: {
+        name: "Data Mosaic",
+        desc: "Slit-scan, scanlines CRT, aberración y etiquetas ID",
+        emoji: "📟",
+        apply: applyDataMosaic
     }
 };
 
@@ -553,4 +559,156 @@ function applyNoiseBlock(ctx, w, h, intensity) {
         }
         ctx.putImageData(noiseImg, bx, by);
     }
+}
+
+// ============================================================================
+// 14. DATA MOSAIC (Slit-Scan, Aberración Cromática, CRT Scanlines & ID Tags)
+// ============================================================================
+let dataMosaicTick = 0;
+
+function applyDataMosaic(ctx, w, h, intensity) {
+    dataMosaicTick++;
+    const normInt = Math.max(0.1, intensity / 100);
+
+    // 1. Efecto Slit-Scan horizontal (arrastre de color en franjas como en la referencia)
+    const numStreaks = Math.floor(4 + normInt * 8);
+    for (let i = 0; i < numStreaks; i++) {
+        const sy = Math.floor(((Math.sin(dataMosaicTick * 0.04 + i * 1.5) * 0.5 + 0.5) * (h - 20)));
+        const sh = Math.max(3, Math.floor(8 + (i % 3) * 6));
+        const sx = Math.floor(((i * 79) % w) * 0.7 + w * 0.15);
+
+        if (i % 2 === 0) {
+            // Arrastre hacia el borde izquierdo
+            ctx.drawImage(ctx.canvas, sx, sy, 2, sh, 0, sy, sx, sh);
+        } else {
+            // Arrastre hacia el borde derecho
+            ctx.drawImage(ctx.canvas, sx, sy, 2, sh, sx, sy, w - sx, sh);
+        }
+    }
+
+    // 2. Aberración cromática (RGB split) + sobreexposición magenta en altas luces
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const copy = new Uint8ClampedArray(d);
+    const shift = Math.max(2, Math.floor(normInt * 7));
+
+    for (let y = 0; y < h; y += 2) {
+        const row = y * w;
+        for (let x = 0; x < w; x++) {
+            const idx = (row + x) * 4;
+            const rx = Math.min(w - 1, x + shift);
+            const bx = Math.max(0, x - shift);
+            const rIdx = (row + rx) * 4;
+            const bIdx = (row + bx) * 4;
+
+            let r = copy[rIdx];
+            let g = copy[idx + 1];
+            let b = copy[bIdx + 2];
+
+            // Tinte etéreo magenta/rosado en áreas claras (fondo estilo glitch art)
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            if (lum > 130) {
+                const boost = (lum - 130) * 0.35 * normInt;
+                r = Math.min(255, r + boost * 1.3);
+                g = Math.max(0, g - boost * 0.25);
+                b = Math.min(255, b + boost * 0.85);
+            }
+
+            d[idx] = r;
+            d[idx + 1] = g;
+            d[idx + 2] = b;
+
+            if (y + 1 < h) {
+                const nextIdx = ((y + 1) * w + x) * 4;
+                d[nextIdx] = r;
+                d[nextIdx + 1] = g;
+                d[nextIdx + 2] = b;
+            }
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // 3. Parches modulares con textura CRT scanlines, tono cobrizo y etiquetas de ID
+    const patches = [
+        { rx: 0.20, ry: 0.22, rw: 0.36, rh: 0.58, id: 'ID_4550', tint: 'warm' },
+        { rx: 0.58, ry: 0.10, rw: 0.28, rh: 0.20, id: 'ID_6739', tint: 'sepia' },
+        { rx: 0.60, ry: 0.44, rw: 0.25, rh: 0.18, id: 'ID_ASS0', tint: 'warm' },
+        { rx: 0.16, ry: 0.86, rw: 0.20, rh: 0.09, id: 'ID_04.07', tint: 'dark' },
+        { rx: 0.02, ry: 0.34, rw: 0.14, rh: 0.14, id: 'ID_239.4', tint: 'cyan' }
+    ];
+
+    ctx.save();
+    patches.forEach((p, idx) => {
+        const px = Math.floor(p.rx * w);
+        const py = Math.floor(p.ry * h);
+        const pw = Math.floor(p.rw * w);
+        const ph = Math.floor(p.rh * h);
+
+        if (pw <= 10 || ph <= 10 || px + pw > w || py + ph > h) return;
+
+        const patchData = ctx.getImageData(px, py, pw, ph);
+        const pd = patchData.data;
+
+        // Tinte analógico y textura scanline CRT densa
+        for (let pyi = 0; pyi < ph; pyi++) {
+            const isScanline = (pyi % 2 === 0);
+            const rowOffset = pyi * pw * 4;
+            for (let pxi = 0; pxi < pw; pxi++) {
+                const i = rowOffset + pxi * 4;
+                let pr = pd[i];
+                let pg = pd[i + 1];
+                let pb = pd[i + 2];
+
+                if (p.tint === 'warm') {
+                    const gray = 0.299 * pr + 0.587 * pg + 0.114 * pb;
+                    pr = Math.min(255, gray * 1.22 + 22);
+                    pg = Math.min(255, gray * 0.94 + 10);
+                    pb = Math.max(0, gray * 0.68 - 8);
+                } else if (p.tint === 'sepia') {
+                    const gray = 0.299 * pr + 0.587 * pg + 0.114 * pb;
+                    pr = Math.min(255, gray * 1.15 + 35);
+                    pg = Math.min(255, gray * 0.90 + 18);
+                    pb = Math.max(0, gray * 0.65);
+                }
+
+                if (isScanline) {
+                    pr = Math.floor(pr * 0.58);
+                    pg = Math.floor(pg * 0.58);
+                    pb = Math.floor(pb * 0.58);
+                }
+
+                pd[i] = pr;
+                pd[i + 1] = pg;
+                pd[i + 2] = pb;
+            }
+        }
+        ctx.putImageData(patchData, px, py);
+
+        // Borde nítido sutil blanco/gris
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+
+        // Cruces HUD en esquinas
+        const cross = 4;
+        ctx.beginPath();
+        ctx.moveTo(px - cross, py); ctx.lineTo(px + cross, py);
+        ctx.moveTo(px, py - cross); ctx.lineTo(px, py + cross);
+        ctx.moveTo(px + pw - cross, py + ph); ctx.lineTo(px + pw + cross, py + ph);
+        ctx.moveTo(px + pw, py + ph - cross); ctx.lineTo(px + pw, py + ph + cross);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.stroke();
+
+        // Etiquetas tipográficas monoespaciadas estilo ID técnico
+        ctx.font = "bold 9px 'JetBrains Mono', monospace, sans-serif";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+        ctx.fillText(p.id, px + 5, py - 4 > 10 ? py - 4 : py + 12);
+
+        if (idx === 0) {
+            ctx.fillStyle = "rgba(255, 210, 230, 0.85)";
+            ctx.font = "7px 'JetBrains Mono', monospace";
+            ctx.fillText(`[${Math.round(px)}, ${Math.round(py)}]`, px + 5, py + 22);
+        }
+    });
+    ctx.restore();
 }
