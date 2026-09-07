@@ -13,6 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -122,6 +123,14 @@
                     <span>🦴</span>
                     <span>Esqueleto</span>
                     <span class="btn-control__badge" id="skeletonBadge">OFF</span>
+                </button>
+
+                <span class="controls-bar__separator"></span>
+
+                <button class="btn-control" id="faceDetectBtn" title="Activar/desactivar detección de rostro (d)">
+                    <span>😀</span>
+                    <span>Rostro</span>
+                    <span class="btn-control__badge" id="faceDetectBadge">OFF</span>
                 </button>
             </div>
 

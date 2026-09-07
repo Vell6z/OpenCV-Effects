@@ -507,3 +507,82 @@ export function drawPoseSkeleton(ctx, landmarks, w, h) {
 
     ctx.restore();
 }
+
+/**
+ * Dibuja las detecciones de rostro con rectángulo, esquinas decorativas,
+ * etiqueta de confianza y keypoints.
+ */
+export function drawFaceDetections(ctx, detections, w, h) {
+    if (!detections || !detections.length) return;
+
+    ctx.save();
+
+    for (const detection of detections) {
+        const bbox = detection.boundingBox;
+        if (!bbox) continue;
+
+        const fx = Math.max(0, Math.round(bbox.xCenter * w - (bbox.width * w) / 2));
+        const fy = Math.max(0, Math.round(bbox.yCenter * h - (bbox.height * h) / 2));
+        const fw = Math.round(bbox.width * w);
+        const fh = Math.round(bbox.height * h);
+
+        // Rectángulo de detección verde con glow
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#00ff88';
+        ctx.shadowBlur = 10;
+        ctx.strokeRect(fx, fy, fw, fh);
+
+        // Esquinas decorativas
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 3;
+        const cl = 14;
+        const corners = [
+            [fx, fy, 1, 1],
+            [fx + fw, fy, -1, 1],
+            [fx, fy + fh, 1, -1],
+            [fx + fw, fy + fh, -1, -1]
+        ];
+        for (const [cx, cy, dx, dy] of corners) {
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + dx * cl, cy);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx, cy + dy * cl);
+            ctx.stroke();
+        }
+
+        // Etiqueta de confianza
+        const score = detection.score && detection.score.length ? detection.score[0] : 0;
+        const label = `Rostro ${Math.round(score * 100)}%`;
+
+        ctx.font = '500 12px "Plus Jakarta Sans", "Inter", sans-serif';
+        const textW = ctx.measureText(label).width;
+
+        // Fondo de la etiqueta
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(fx, fy - 22, textW + 12, 20);
+
+        // Texto
+        ctx.fillStyle = '#00ff88';
+        ctx.fillText(label, fx + 6, fy - 7);
+
+        // Keypoints (ojos, nariz, boca, orejas)
+        if (detection.landmarks && detection.landmarks.length) {
+            for (const kp of detection.landmarks) {
+                const kx = Math.round(kp.x * w);
+                const ky = Math.round(kp.y * h);
+                ctx.fillStyle = '#36d6e7';
+                ctx.shadowColor = '#36d6e7';
+                ctx.shadowBlur = 6;
+                ctx.beginPath();
+                ctx.arc(kx, ky, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    ctx.restore();
+}

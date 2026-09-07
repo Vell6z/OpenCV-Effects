@@ -15,7 +15,8 @@ import {
     rotatedRectFromHands,
     boxFromPose, rotatedRectFromPose,
     drawBrokenGlassBorder, drawHudBorder,
-    drawHandSkeleton, drawPoseSkeleton
+    drawHandSkeleton, drawPoseSkeleton,
+    drawFaceDetections
 } from './hand_tracking.js';
 
 (function() {
@@ -51,6 +52,8 @@ import {
     const rotationBadge = document.getElementById('rotationBadge');
     const skeletonBtn = document.getElementById('skeletonBtn');
     const skeletonBadge = document.getElementById('skeletonBadge');
+    const faceDetectBtn = document.getElementById('faceDetectBtn');
+    const faceDetectBadge = document.getElementById('faceDetectBadge');
     const effectsList = document.getElementById('effectsList');
     const effectCount = document.getElementById('effectCount');
     const toast = document.getElementById('toast');
@@ -69,6 +72,7 @@ import {
     let bodyModeIndex = 0; // 0 = 'cuerpo_completo'
     let allowRotation = true;
     let showSkeleton = false;
+    let faceDetectEnabled = false;
     let isStreaming = false;
     let currentFacingMode = 'user';
     let availableCameras = [];
@@ -82,6 +86,7 @@ import {
 
     let latestHandResults = null;
     let latestPoseResults = null;
+    let latestFaceResults = null;
 
     // FPS Meter
     let frameCount = 0;
@@ -125,6 +130,7 @@ import {
     // ---- MediaPipe Setup (Hands & Pose) ----
     let hands = null;
     let pose = null;
+    let faceDetection = null;
     function initMediaPipe() {
         if (window.Hands) {
             hands = new window.Hands({
@@ -161,6 +167,21 @@ import {
         } else {
             console.warn('MediaPipe Pose script not loaded yet.');
         }
+
+        if (window.FaceDetection) {
+            faceDetection = new window.FaceDetection({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+            });
+
+            faceDetection.setOptions({
+                model: 'short',
+                minDetectionConfidence: 0.5
+            });
+
+            faceDetection.onResults(onFaceResults);
+        } else {
+            console.warn('MediaPipe FaceDetection script not loaded yet.');
+        }
     }
 
     function onHandResults(results) {
@@ -169,6 +190,10 @@ import {
 
     function onPoseResults(results) {
         latestPoseResults = results;
+    }
+
+    function onFaceResults(results) {
+        latestFaceResults = results;
     }
 
     // ---- Camera Streaming ----
@@ -274,6 +299,16 @@ import {
 
             // 3. Medidor de FPS
             calculateFPS();
+
+            // 4. Detección de rostro (superpuesta sobre todo, si está activada)
+            if (faceDetectEnabled) {
+                if (faceDetection && (frameCounter % 3 === 0)) {
+                    await faceDetection.send({ image: sourceVideo });
+                }
+                if (latestFaceResults && latestFaceResults.detections) {
+                    drawFaceDetections(ctx, latestFaceResults.detections, w, h);
+                }
+            }
 
             requestAnimationFrame(loop);
         }
@@ -631,6 +666,13 @@ import {
         showToast(`🦴 Esqueleto: ${showSkeleton ? 'ON' : 'OFF'}`);
     });
 
+    faceDetectBtn.addEventListener('click', () => {
+        faceDetectEnabled = !faceDetectEnabled;
+        faceDetectBtn.classList.toggle('active', faceDetectEnabled);
+        faceDetectBadge.textContent = faceDetectEnabled ? 'ON' : 'OFF';
+        showToast(faceDetectEnabled ? '😀 Detección de rostro activada' : '😀 Detección de rostro desactivada');
+    });
+
     flipCameraBtn.addEventListener('click', () => {
         currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
         startCamera(null, currentFacingMode);
@@ -660,6 +702,7 @@ import {
         else if (e.key === 'm') modeBtn.click();
         else if (e.key === 'r') rotationBtn.click();
         else if (e.key === 'h') skeletonBtn.click();
+        else if (e.key === 'd') faceDetectBtn.click();
         else if (e.key === 'f') fullscreenBtn.click();
     });
 
