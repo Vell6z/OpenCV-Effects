@@ -89,6 +89,12 @@ export const EFFECTS = {
         desc: "Slit-scan, scanlines CRT, aberración y etiquetas ID",
         emoji: "📟",
         apply: applyDataMosaic
+    },
+    retro_vhs: {
+        name: "Retro VHS",
+        desc: "Cinta VHS 80s, tracking noise, scanlines CRT y OSD",
+        emoji: "📼",
+        apply: applyRetroVhs
     }
 };
 
@@ -710,5 +716,137 @@ function applyDataMosaic(ctx, w, h, intensity) {
             ctx.fillText(`[${Math.round(px)}, ${Math.round(py)}]`, px + 5, py + 22);
         }
     });
+    ctx.restore();
+}
+
+// ============================================================================
+// 15. RETRO VHS (Cinta Analógica 80s, Tracking Noise, Scanlines CRT & VCR OSD)
+// ============================================================================
+let vhsTick = 0;
+
+function applyRetroVhs(ctx, w, h, intensity) {
+    vhsTick++;
+    const norm = Math.max(0.1, intensity / 100);
+
+    // 1. Jitter horizontal de cinta VHS (Sync Wobble)
+    const wobbleIntensity = Math.max(1, norm * 4);
+    const wobbleH = Math.max(6, Math.floor(h / 30));
+    for (let sy = 0; sy < h; sy += wobbleH) {
+        const offset = Math.sin(vhsTick * 0.15 + sy * 0.05) * wobbleIntensity;
+        if (Math.abs(offset) > 0.5) {
+            ctx.drawImage(ctx.canvas, 0, sy, w, wobbleH, offset, sy, w, wobbleH);
+        }
+    }
+
+    // 2. Glitch de salto de cabezal magnético (Tape Tear ocasional)
+    if (vhsTick % 45 < 6) {
+        const tearY = (Math.sin(vhsTick * 0.08) * 0.5 + 0.5) * (h - 40);
+        const tearH = Math.floor(12 + Math.random() * 20);
+        const tearShift = (Math.random() - 0.5) * norm * 35;
+        ctx.drawImage(ctx.canvas, 0, tearY, w, tearH, tearShift, tearY, w, tearH);
+    }
+
+    // 3. Procesamiento de píxeles: NTSC Chroma Bleed, Scanlines CRT & Compresión analógica
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const copy = new Uint8ClampedArray(d);
+
+    const chromaShift = Math.max(2, Math.floor(norm * 9));
+    const trackingZoneStart = Math.max(0, h - Math.floor(18 + norm * 16)); // Franja inferior de ruido
+
+    for (let y = 0; y < h; y++) {
+        const isScanline = (y % 2 === 0);
+        const isTrackingNoise = (y >= trackingZoneStart);
+        const row = y * w;
+
+        for (let x = 0; x < w; x++) {
+            const idx = (row + x) * 4;
+
+            if (isTrackingNoise) {
+                // Nieve estática del cabezal magnético en la base
+                const noise = Math.random() > 0.35 ? (Math.random() * 255) : 30;
+                d[idx] = noise;
+                d[idx + 1] = noise;
+                d[idx + 2] = noise;
+                continue;
+            }
+
+            // Desplazamiento NTSC: el canal rojo se desborda a la derecha, el azul a la izquierda
+            const redX = Math.min(w - 1, x + chromaShift);
+            const blueX = Math.max(0, x - Math.floor(chromaShift * 0.6));
+            const rIdx = (row + redX) * 4;
+            const bIdx = (row + blueX) * 4;
+
+            let r = copy[rIdx];
+            let g = copy[idx + 1];
+            let b = copy[bIdx + 2];
+
+            // Tinte cálido analógico y compresión de negros VHS (elevated blacks)
+            r = Math.min(255, r * 1.08 + 12);
+            g = Math.min(255, g * 1.02 + 8);
+            b = Math.max(0, b * 0.90 + 10);
+
+            // Grano fino analógico
+            if (Math.random() < 0.05) {
+                const grain = (Math.random() - 0.5) * 40 * norm;
+                r = Math.min(255, Math.max(0, r + grain));
+                g = Math.min(255, Math.max(0, g + grain));
+                b = Math.min(255, Math.max(0, b + grain));
+            }
+
+            // Scanlines de monitor CRT entrelazado
+            if (isScanline) {
+                r *= 0.72;
+                g *= 0.72;
+                b *= 0.72;
+            }
+
+            d[idx] = r;
+            d[idx + 1] = g;
+            d[idx + 2] = b;
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // 4. OSD Vintage de Videocámara 80s (On Screen Display)
+    ctx.save();
+    const fontSize = Math.max(11, Math.floor(w * 0.038));
+    ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace, sans-serif`;
+    ctx.textBaseline = 'top';
+
+    // Sombra negra sólida de OSD analógico
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+    ctx.shadowBlur = 0;
+
+    // PLAY ▶ parpadeante en verde fósforo VCR
+    const showPlay = Math.floor(vhsTick / 28) % 2 === 0;
+    if (showPlay) {
+        ctx.fillStyle = '#55ff77';
+        ctx.fillText('PLAY ▶', 18, 16);
+    }
+
+    // SP (Standard Play) en la esquina superior derecha
+    ctx.fillStyle = '#ffffff';
+    const spText = 'SP';
+    const spWidth = ctx.measureText(spText).width;
+    ctx.fillText(spText, w - spWidth - 18, 16);
+
+    // Fecha 80s y reloj transcurriendo en la esquina inferior izquierda
+    const dateText = 'OCT. 26 1989';
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')} PM`;
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(dateText, 18, h - fontSize * 2.8 - 18);
+    ctx.fillText(timeStr, 18, h - fontSize * 1.5 - 18);
+
+    // Canal y tracking OSD en la esquina inferior derecha
+    const chText = 'CH 03';
+    const chWidth = ctx.measureText(chText).width;
+    ctx.fillStyle = '#55ff77';
+    ctx.fillText(chText, w - chWidth - 18, h - fontSize * 1.5 - 18);
+
     ctx.restore();
 }

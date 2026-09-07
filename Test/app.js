@@ -63,7 +63,7 @@ import {
     const patchCtx = patchCanvas.getContext('2d', { willReadFrequently: true });
 
     // ---- State ----
-    let currentEffect = 'data_mosaic';
+    let currentEffect = 'retro_vhs';
     let intensity = 85;
     let targetMode = 'hands'; // 'hands' | 'body' | 'face'
     let modeIndex = 1; // 1 = 'encuadre_dedos'
